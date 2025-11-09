@@ -5,15 +5,13 @@ import Chat from "@/models/Chat";
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
-// ✅ Initialize DeepSeek or OpenAI API
+// ✅ Use OpenAI key directly
 const openai = new OpenAI({
-  baseURL: "https://api.deepseek.com",
-  apiKey: process.env.DEEPSEEK_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 export async function POST(req) {
   try {
-    // ✅ Parse request body
     const { chatId, prompt } = await req.json();
 
     if (!chatId || !prompt) {
@@ -23,11 +21,11 @@ export async function POST(req) {
       });
     }
 
-    // ✅ If it's the default "owner-chat", just simulate it
+    // ✅ Handle default offline chat (no DB)
     if (chatId === "owner-chat") {
       const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
-        model: "deepseek-chat",
       });
 
       const message = completion.choices?.[0]?.message || {
@@ -38,7 +36,7 @@ export async function POST(req) {
       return NextResponse.json({ success: true, data: message });
     }
 
-    // ✅ Otherwise handle MongoDB chat
+    // ✅ Handle MongoDB chat
     await connectDB();
     const data = await Chat.findById(chatId);
     if (!data) {
@@ -48,7 +46,6 @@ export async function POST(req) {
       });
     }
 
-    // ✅ Add user's message
     const userPrompt = {
       role: "user",
       content: prompt,
@@ -56,10 +53,9 @@ export async function POST(req) {
     };
     data.messages.push(userPrompt);
 
-    // ✅ Get AI reply
     const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      model: "deepseek-chat",
     });
 
     const message = completion.choices?.[0]?.message || {
@@ -68,7 +64,6 @@ export async function POST(req) {
     };
     message.timestamp = Date.now();
 
-    // ✅ Save assistant message to MongoDB
     data.messages.push(message);
     await data.save();
 
@@ -78,6 +73,7 @@ export async function POST(req) {
     return NextResponse.json({
       success: false,
       error: error.message || "Server error",
+      details: error.stack,
     });
   }
 }
