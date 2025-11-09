@@ -123,7 +123,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         onKeyDown={handleKeyDown}
         className="outline-none w-full resize-none overflow-hidden break-words bg-transparent"
         rows={2}
-        placeholder="Message DeepSeek"
+        placeholder="Message Dahdouh AI"
         required
         onChange={(e) => setPrompt(e.target.value)}
         value={prompt}
