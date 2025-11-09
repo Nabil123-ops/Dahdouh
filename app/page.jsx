@@ -65,7 +65,7 @@ export default function Home() {
                 alt="logo icon"
                 className="h-16 w-16 object-contain"
               />
-              <p className="text-2xl font-medium">Hi, I'm DeepSeek</p>
+              <p className="text-2xl font-medium">Hi, I'm Dahdouh AI</p>
             </div>
             <p className="text-sm mt-2">How can I help you today?</p>
           </>
