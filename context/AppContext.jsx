@@ -5,47 +5,39 @@ import { createContext, useContext, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 export const AppContext = createContext();
-
-export const useAppContext = () => {
-  return useContext(AppContext);
-};
+export const useAppContext = () => useContext(AppContext);
 
 export const AppContextProvider = ({ children }) => {
   const { user } = useUser();
   const { getToken } = useAuth();
 
   const [chats, setChats] = useState([]);
-  // ✅ Default chat so app never shows "Please select a chat first"
-  const [selectedChat, setSelectedChat] = useState({
-    _id: "owner-chat",
-    name: "Owner Chat",
-    userId: "owner",
-    messages: [],
-  });
+  const [selectedChat, setSelectedChat] = useState(null);
 
-  // ✅ Create a new chat in database (for logged-in users)
+  // ✅ Create a new chat in MongoDB
   const createNewChat = async () => {
     try {
-      if (!user) return null;
       const token = await getToken();
-
-      await axios.post(
+      const { data } = await axios.post(
         "/api/chat/create",
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      fetchUsersChats();
+      if (data.success) {
+        fetchUsersChats();
+      } else {
+        toast.error(data.message);
+      }
     } catch (error) {
       toast.error(error.message);
     }
   };
 
-  // ✅ Fetch user's chats from MongoDB if logged in
+  // ✅ Fetch all user's chats
   const fetchUsersChats = async () => {
     try {
       const token = await getToken();
-
       const { data } = await axios.get("/api/chat/get", {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -54,11 +46,10 @@ export const AppContextProvider = ({ children }) => {
         setChats(data.data);
 
         if (data.data.length === 0) {
-          // If no chats, create one then refetch
+          // If no chats exist yet, create one automatically
           await createNewChat();
-          return fetchUsersChats();
         } else {
-          // Sort by latest updated and select first one
+          // Sort and select the most recent chat
           data.data.sort(
             (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
           );
@@ -72,26 +63,14 @@ export const AppContextProvider = ({ children }) => {
     }
   };
 
-  // ✅ When user changes (login/logout)
+  // ✅ When user logs in/out
   useEffect(() => {
     if (user) {
       fetchUsersChats();
     } else {
-      // 👇 Default offline "Owner Chat" (no Clerk)
-      setChats([
-        {
-          _id: "owner-chat",
-          name: "Owner Chat",
-          userId: "owner",
-          messages: [],
-        },
-      ]);
-      setSelectedChat({
-        _id: "owner-chat",
-        name: "Owner Chat",
-        userId: "owner",
-        messages: [],
-      });
+      // Clear data if logged out
+      setChats([]);
+      setSelectedChat(null);
     }
   }, [user]);
 
