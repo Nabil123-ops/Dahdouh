@@ -2,31 +2,31 @@ import connectDB from "@/config/db";
 import Chat from "@/models/Chat";
 import { getAuth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import mongoose from "mongoose";
 
 export const maxDuration = 60;
 
-// 🧠 Use Groq API directly
 export async function POST(req) {
   try {
     const { userId } = getAuth(req);
-    if (!userId) {
-      return NextResponse.json({ success: false, message: "User not authenticated" });
-    }
+    if (!userId) return NextResponse.json({ success: false, message: "User not authenticated" });
 
     const { chatId, prompt } = await req.json();
-    if (!chatId || !prompt) {
+    if (!chatId || !prompt)
       return NextResponse.json({ success: false, message: "Missing chatId or prompt" });
+
+    // ✅ Validate ObjectId before querying MongoDB
+    if (!mongoose.Types.ObjectId.isValid(chatId)) {
+      return NextResponse.json({ success: false, message: "Invalid chat ID" });
     }
 
     await connectDB();
-    const data = await Chat.findOne({ userId, _id: chatId });
-    if (!data) {
-      return NextResponse.json({ success: false, message: "Chat not found" });
-    }
+    const chat = await Chat.findOne({ userId, _id: chatId });
+    if (!chat) return NextResponse.json({ success: false, message: "Chat not found" });
 
-    // Add the user’s message
+    // Add user message
     const userPrompt = { role: "user", content: prompt, timestamp: Date.now() };
-    data.messages.push(userPrompt);
+    chat.messages.push(userPrompt);
 
     // 🔥 Call Groq API
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -42,7 +42,6 @@ export async function POST(req) {
     });
 
     const result = await response.json();
-
     if (result.error) {
       console.error("❌ Groq API Error:", result);
       return NextResponse.json({ success: false, message: result.error.message });
@@ -54,8 +53,8 @@ export async function POST(req) {
     };
     message.timestamp = Date.now();
 
-    data.messages.push(message);
-    await data.save();
+    chat.messages.push(message);
+    await chat.save();
 
     return NextResponse.json({ success: true, data: message });
   } catch (error) {
