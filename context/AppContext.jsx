@@ -15,12 +15,18 @@ export const AppContextProvider = ({ children }) => {
   const { getToken } = useAuth();
 
   const [chats, setChats] = useState([]);
-  const [selectedChat, setSelectedChat] = useState(null);
+  // ✅ Default chat so app never shows "Please select a chat first"
+  const [selectedChat, setSelectedChat] = useState({
+    _id: "owner-chat",
+    name: "Owner Chat",
+    userId: "owner",
+    messages: [],
+  });
 
+  // ✅ Create a new chat in database (for logged-in users)
   const createNewChat = async () => {
     try {
       if (!user) return null;
-
       const token = await getToken();
 
       await axios.post(
@@ -35,6 +41,7 @@ export const AppContextProvider = ({ children }) => {
     }
   };
 
+  // ✅ Fetch user's chats from MongoDB if logged in
   const fetchUsersChats = async () => {
     try {
       const token = await getToken();
@@ -44,22 +51,18 @@ export const AppContextProvider = ({ children }) => {
       });
 
       if (data.success) {
-        console.log(data.data);
         setChats(data.data);
 
-        // If the user has no chats, create one
         if (data.data.length === 0) {
+          // If no chats, create one then refetch
           await createNewChat();
           return fetchUsersChats();
         } else {
-          // Sort charts by updated date
+          // Sort by latest updated and select first one
           data.data.sort(
             (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
           );
-
-          // Set recently updated chat as selected chat
           setSelectedChat(data.data[0]);
-          console.log(data.data[0]);
         }
       } else {
         toast.error(data.message);
@@ -69,9 +72,26 @@ export const AppContextProvider = ({ children }) => {
     }
   };
 
+  // ✅ When user changes (login/logout)
   useEffect(() => {
     if (user) {
       fetchUsersChats();
+    } else {
+      // 👇 Default offline "Owner Chat" (no Clerk)
+      setChats([
+        {
+          _id: "owner-chat",
+          name: "Owner Chat",
+          userId: "owner",
+          messages: [],
+        },
+      ]);
+      setSelectedChat({
+        _id: "owner-chat",
+        name: "Owner Chat",
+        userId: "owner",
+        messages: [],
+      });
     }
   }, [user]);
 
