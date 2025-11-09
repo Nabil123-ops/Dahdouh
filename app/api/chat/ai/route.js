@@ -3,29 +3,10 @@ export const maxDuration = 60;
 import connectDB from "@/config/db";
 import Chat from "@/models/Chat";
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
 
 export async function POST(req) {
-  console.log("📩 Incoming request to /api/chat/ai");
-
   try {
-    const body = await req.text();
-    console.log("📦 Raw body:", body);
-
-    let chatId = null;
-    let prompt = null;
-
-    try {
-      const parsed = JSON.parse(body);
-      chatId = parsed.chatId;
-      prompt = parsed.prompt;
-    } catch (e) {
-      console.error("❌ JSON parse error:", e);
-      return NextResponse.json({ success: false, error: "Invalid JSON body" });
-    }
-
-    console.log("🧠 chatId:", chatId);
-    console.log("💬 prompt:", prompt);
+    const { chatId, prompt } = await req.json();
 
     if (!prompt) {
       return NextResponse.json({
@@ -34,54 +15,48 @@ export async function POST(req) {
       });
     }
 
-    // ✅ Initialize OpenAI client
-    if (!process.env.OPENAI_API_KEY) {
-      console.error("❌ Missing OPENAI_API_KEY");
-      return NextResponse.json({
-        success: false,
-        error: "Missing OPENAI_API_KEY in environment",
-      });
-    }
-
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
-    console.log("✅ OpenAI initialized");
-
-    // ✅ Handle default owner chat
+    // ✅ Handle default chat
     if (!chatId || chatId === "owner-chat") {
-      console.log("🟢 Using owner-chat mode");
-
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: process.env.GROQ_MODEL || "llama3-70b-8192",
+          messages: [{ role: "user", content: prompt }],
+        }),
       });
 
-      const message = completion.choices?.[0]?.message || {
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("❌ Groq API Error:", data);
+        return NextResponse.json({
+          success: false,
+          error: data.error?.message || "Groq API failed",
+        });
+      }
+
+      const message = data.choices?.[0]?.message || {
         role: "assistant",
         content: "No response generated.",
       };
 
-      console.log("✅ AI response:", message);
       return NextResponse.json({ success: true, data: message });
     }
 
-    // ✅ MongoDB handling
-    console.log("🧩 Connecting to MongoDB...");
+    // ✅ Handle MongoDB chats (for logged users)
     await connectDB();
-    console.log("✅ MongoDB connected");
-
     const data = await Chat.findById(chatId);
     if (!data) {
-      console.error("❌ Chat not found in DB");
       return NextResponse.json({
         success: false,
-        message: "Chat not found",
+        message: "Chat not found in database",
       });
     }
 
-    console.log("📝 Adding user message to chat");
     const userPrompt = {
       role: "user",
       content: prompt,
@@ -89,29 +64,34 @@ export async function POST(req) {
     };
     data.messages.push(userPrompt);
 
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || "llama3-70b-8192",
+        messages: [{ role: "user", content: prompt }],
+      }),
     });
 
-    const message = completion.choices?.[0]?.message || {
+    const result = await response.json();
+    const message = result.choices?.[0]?.message || {
       role: "assistant",
       content: "No response generated.",
     };
     message.timestamp = Date.now();
 
-    console.log("💾 Saving to DB");
     data.messages.push(message);
     await data.save();
 
-    console.log("✅ Chat updated successfully");
     return NextResponse.json({ success: true, data: message });
   } catch (error) {
     console.error("❌ AI route error:", error);
     return NextResponse.json({
       success: false,
       error: error.message || "Server error",
-      stack: error.stack,
     });
   }
 }
