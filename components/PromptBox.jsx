@@ -1,3 +1,5 @@
+"use client";
+
 import { assets } from "@/assets/assets";
 import { useAppContext } from "@/context/AppContext";
 import axios from "axios";
@@ -7,7 +9,65 @@ import toast from "react-hot-toast";
 
 const PromptBox = ({ isLoading, setIsLoading }) => {
   const [prompt, setPrompt] = useState("");
-  const { user, chats, setChats, selectedChat, setSelectedChat } = useAppContext();
+  const { user, chats, setChats, selectedChat, setSelectedChat } =
+    useAppContext();
+
+  // 📌 Upload file handler
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!selectedChat?._id) {
+      return toast.error("⚠️ Please select or create a chat first.");
+    }
+
+    toast.loading("Uploading file...");
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      toast.dismiss();
+
+      if (!data.success) {
+        console.error(data.error);
+        return toast.error("Upload failed");
+      }
+
+      // Insert uploaded file URL into chat
+      const fileMessage = {
+        role: "user",
+        content: `📎 Uploaded file: ${data.url}`,
+        timestamp: Date.now(),
+      };
+
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat._id === selectedChat._id
+            ? { ...chat, messages: [...chat.messages, fileMessage] }
+            : chat
+        )
+      );
+
+      setSelectedChat((prev) => ({
+        ...prev,
+        messages: [...prev.messages, fileMessage],
+      }));
+
+      toast.success("File uploaded!");
+
+    } catch (err) {
+      toast.dismiss();
+      console.error(err);
+      toast.error("Upload error");
+    }
+  };
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -20,7 +80,6 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     e.preventDefault();
     const promptCopy = prompt.trim();
 
-    // ✅ 1. Safety checks before sending
     if (!user) return toast.error("Please login to send a message");
     if (isLoading) return toast.error("Wait for the previous response");
     if (!selectedChat || !selectedChat._id) {
@@ -38,25 +97,21 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         timestamp: Date.now(),
       };
 
-      // ✅ 2. Safely update chats (no crash if messages is undefined)
-      setChats((prevChats) =>
-        prevChats.map((chat) =>
+      // Add user message
+      setChats((prev) =>
+        prev.map((chat) =>
           chat._id === selectedChat._id
-            ? {
-                ...chat,
-                messages: [...(chat.messages || []), userPrompt],
-              }
+            ? { ...chat, messages: [...chat.messages, userPrompt] }
             : chat
         )
       );
 
-      // ✅ 3. Update selected chat safely
       setSelectedChat((prev) => ({
         ...prev,
-        messages: [...(prev?.messages || []), userPrompt],
+        messages: [...prev.messages, userPrompt],
       }));
 
-      // ✅ 4. Send the prompt to backend
+      // Call backend AI
       const { data } = await axios.post("/api/chat/ai", {
         chatId: selectedChat._id,
         prompt: promptCopy,
@@ -68,38 +123,38 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         return;
       }
 
-      // ✅ 5. Add assistant message safely
-      const message = data.data.content;
-      const messageTokens = message.split(" ");
+      // AI message typing effect
+      const text = data.data.content;
+      const words = text.split(" ");
+
       let assistantMessage = {
         role: "assistant",
         content: "",
         timestamp: Date.now(),
       };
 
-      setChats((prevChats) =>
-        prevChats.map((chat) =>
+      setChats((prev) =>
+        prev.map((chat) =>
           chat._id === selectedChat._id
-            ? { ...chat, messages: [...(chat.messages || []), assistantMessage] }
+            ? { ...chat, messages: [...chat.messages, assistantMessage] }
             : chat
         )
       );
 
       setSelectedChat((prev) => ({
         ...prev,
-        messages: [...(prev?.messages || []), assistantMessage],
+        messages: [...prev.messages, assistantMessage],
       }));
 
-      // ✅ 6. Typewriter effect for AI message
-      for (let i = 0; i < messageTokens.length; i++) {
+      for (let i = 0; i < words.length; i++) {
         setTimeout(() => {
-          assistantMessage.content = messageTokens.slice(0, i + 1).join(" ");
+          assistantMessage.content = words.slice(0, i + 1).join(" ");
           setSelectedChat((prev) => {
-            const updatedMessages = [
+            const updated = [
               ...prev.messages.slice(0, -1),
               assistantMessage,
             ];
-            return { ...prev, messages: updatedMessages };
+            return { ...prev, messages: updated };
           });
         }, i * 60);
       }
@@ -121,38 +176,54 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     >
       <textarea
         onKeyDown={handleKeyDown}
-        className="outline-none w-full resize-none overflow-hidden break-words bg-transparent"
+        className="outline-none w-full resize-none bg-transparent"
         rows={2}
         placeholder="Message Dahdouh AI"
         required
-        onChange={(e) => setPrompt(e.target.value)}
         value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
       />
 
       <div className="flex items-center justify-between text-sm">
         <div className="flex items-center gap-2">
-          <p className="flex items-center gap-2 text-xs border border-gray-300/40 px-2 py-1 rounded-full cursor-pointer hover:bg-gray-500/20 transition">
-            <Image className="h-5" src={assets.deepthink_icon} alt="deepthink icon" />
+          <p className="flex items-center gap-2 text-xs border border-gray-300/40 px-2 py-1 rounded-full">
+            <Image className="h-5" src={assets.deepthink_icon} alt="" />
             DeepThink (R1)
           </p>
-          <p className="flex items-center gap-2 text-xs border border-gray-300/40 px-2 py-1 rounded-full cursor-pointer hover:bg-gray-500/20 transition">
-            <Image className="h-5" src={assets.search_icon} alt="search icon" />
+          <p className="flex items-center gap-2 text-xs border border-gray-300/40 px-2 py-1 rounded-full">
+            <Image className="h-5" src={assets.search_icon} alt="" />
             Search
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Image className="w-4 cursor-pointer" src={assets.pin_icon} alt="pin icon" />
+        <div className="flex items-center gap-3">
+
+          {/* Hidden File Input */}
+          <input
+            type="file"
+            id="upload-input"
+            className="hidden"
+            onChange={handleFileUpload}
+          />
+
+          {/* Upload Button */}
+          <Image
+            onClick={() => document.getElementById("upload-input").click()}
+            className="w-4 cursor-pointer"
+            src={assets.pin_icon}
+            alt="upload"
+          />
+
           <button
             type="submit"
             className={`${
               prompt ? "bg-primary" : "bg-[#71717a]"
-            } rounded-full p-2 cursor-pointer`}
+            } rounded-full p-2`}
           >
             <Image
-              className="w-3.5 aspect-square"
+              className="w-3.5"
               src={prompt ? assets.arrow_icon : assets.arrow_icon_dull}
-              alt={prompt ? "arrow icon" : "arrow icon dull"}
+              alt="send"
             />
           </button>
         </div>
