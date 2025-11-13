@@ -3,13 +3,11 @@ import { createClient } from "@supabase/supabase-js";
 
 export async function POST(req) {
   try {
-    // Create Supabase client
     const supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_KEY
     );
 
-    // Read form-data
     const formData = await req.formData();
     const file = formData.get("file");
 
@@ -20,14 +18,19 @@ export async function POST(req) {
       );
     }
 
-    // Convert file → buffer
+    // Convert Arabic/Unicode characters → "file"
+    const originalName = file.name;
+    const safeName = originalName
+      .replace(/[^a-zA-Z0-9.\-_]/g, ""); // keep only safe characters
+
+    // If name becomes empty, assign fallback:
+    const finalName = safeName.length > 0 ? safeName : "file";
+
+    const fileName = `${Date.now()}-${finalName}`;
+
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Create unique filename
-    const fileName = `${Date.now()}-${file.name}`;
-
-    // Upload to Supabase bucket
     const { data, error } = await supabase.storage
       .from(process.env.SUPABASE_BUCKET)
       .upload(fileName, buffer, {
@@ -42,15 +45,15 @@ export async function POST(req) {
       );
     }
 
-    // Get public URL
-    const { data: publicUrlData } = supabase.storage
+    const { data: urlData } = supabase.storage
       .from(process.env.SUPABASE_BUCKET)
       .getPublicUrl(fileName);
 
     return NextResponse.json({
       success: true,
-      url: publicUrlData.publicUrl,
+      url: urlData.publicUrl,
     });
+
   } catch (err) {
     console.error("❌ Upload route error:", err);
     return NextResponse.json(
