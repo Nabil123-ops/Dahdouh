@@ -15,6 +15,11 @@ const Message = ({ role, content }) => {
     Prism.highlightAll();
   }, [content]);
 
+  // 🔥 Detect if content is an image URL
+  const isImage =
+    typeof content === "string" &&
+    content.match(/\.(png|jpg|jpeg|webp|gif)$/i);
+
   return (
     <div className="flex flex-col items-center w-full max-w-3xl text-sm">
       <div
@@ -74,17 +79,40 @@ const Message = ({ role, content }) => {
               )}
             </div>
           </div>
+
+          {/* 🔥 USER MESSAGE BLOCK */}
           {role === "user" ? (
-            <span className="text-white/90">{content}</span>
+            <>
+              {isImage ? (
+                <img
+                  src={content}
+                  alt="Uploaded"
+                  className="rounded-lg max-w-xs"
+                />
+              ) : (
+                <span className="text-white/90">{content}</span>
+              )}
+            </>
           ) : (
             <>
+              {/* AI LOGO */}
               <Image
                 src={assets.logo_icon}
                 alt="logo icon"
                 className="w-9 h-9 p-1 border border-white/15 rounded-full"
               />
+
+              {/* AI MESSAGE */}
               <div className="space-y-4 w-full overflow-scroll">
-                <Markdown>{content}</Markdown>
+                {isImage ? (
+                  <img
+                    src={content}
+                    alt="AI uploaded"
+                    className="rounded-lg max-w-xs"
+                  />
+                ) : (
+                  <Markdown>{content}</Markdown>
+                )}
               </div>
             </>
           )}
