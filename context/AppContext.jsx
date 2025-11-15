@@ -5,6 +5,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 
 export const AppContext = createContext();
+
 export const useAppContext = () => useContext(AppContext);
 
 export const AppContextProvider = ({ children }) => {
@@ -12,67 +13,99 @@ export const AppContextProvider = ({ children }) => {
   const { getToken } = useAuth();
 
   const [chats, setChats] = useState([]);
-  const [selectedChat, setSelectedChat] = useState(null);
+  const [selectedChat, setSelectedChat] = useState(null); // Default null
 
-  // ✅ Create a new chat in MongoDB
+  // 🚀 Create a New Chat
   const createNewChat = async () => {
     try {
+      if (!user) return toast.error("You must log in first.");
+
       const token = await getToken();
-      const { data } = await axios.post(
+
+      const response = await axios.post(
         "/api/chat/create",
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      if (data.success) {
-        fetchUsersChats();
+      if (response.data.success) {
+        await fetchUsersChats();
       } else {
-        toast.error(data.message);
+        toast.error(response.data.message);
       }
-    } catch (error) {
-      toast.error(error.message);
+    } catch (err) {
+      toast.error("Failed to create chat");
+      console.error("Create chat error:", err.message);
     }
   };
 
-  // ✅ Fetch all user's chats
+  // 🚀 Load all chats from backend
   const fetchUsersChats = async () => {
     try {
+      if (!user) return;
+
       const token = await getToken();
+
       const { data } = await axios.get("/api/chat/get", {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       if (data.success) {
-        setChats(data.data);
+        const loadedChats = data.data;
+        setChats(loadedChats);
 
-        if (data.data.length === 0) {
-          // If no chats exist yet, create one automatically
+        // If no chats → create one
+        if (loadedChats.length === 0) {
           await createNewChat();
-        } else {
-          // Sort and select the most recent chat
-          data.data.sort(
-            (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
-          );
-          setSelectedChat(data.data[0]);
+          return;
         }
+
+        // Sort by latest
+        loadedChats.sort(
+          (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
+        );
+
+        // Auto-select the first (latest) chat
+        setSelectedChat(loadedChats[0]);
       } else {
         toast.error(data.message);
       }
-    } catch (error) {
-      toast.error(error.message);
+    } catch (err) {
+      toast.error("Failed to load chats");
+      console.error("Get chats error:", err.message);
     }
   };
 
-  // ✅ When user logs in/out
+  // 🚀 Handle login/logout
   useEffect(() => {
     if (user) {
       fetchUsersChats();
     } else {
-      // Clear data if logged out
-      setChats([]);
-      setSelectedChat(null);
+      // Offline Mode (Owner Chat)
+      const ownerChat = {
+        _id: "owner-chat",
+        name: "Owner Chat",
+        userId: "owner",
+        messages: [],
+      };
+
+      setChats([ownerChat]);
+      setSelectedChat(ownerChat);
     }
   }, [user]);
+
+  const value = {
+    user,
+    chats,
+    setChats,
+    selectedChat,
+    setSelectedChat,
+    fetchUsersChats,
+    createNewChat,
+  };
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+};  }, [user]);
 
   const value = {
     user,
