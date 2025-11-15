@@ -107,41 +107,7 @@ export const AppContextProvider = ({ children }) => {
       {children}
     </AppContext.Provider>
   );
-};      setChats([ownerChat]);
-      setSelectedChat(ownerChat);
-    }
-  }, [user]);
-
-  const value = {
-    user,
-    chats,
-    setChats,
-    selectedChat,
-    setSelectedChat,
-    fetchUsersChats,
-    createNewChat,
-  };
-
-  return (
-    <AppContext.Provider value={value}>
-      {children}
-    </AppContext.Provider>
-  );
-};        userId: "owner",
-        messages: [],
-      };
-
-      setChats([ownerChat]);
-      setSelectedChat(ownerChat);
-    }
-  }, [user]);
-
-  const value = {
-    user,
-    chats,
-    setChats,
-    selectedChat,
-    setSelectedChat,
+};
     fetchUsersChats,
     createNewChat,
   };
