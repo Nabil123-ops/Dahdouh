@@ -6,24 +6,44 @@ import { getAuth } from "@clerk/nextjs/server";
 
 export async function POST(req) {
   try {
+    await connectDB();
+
     const { userId } = getAuth(req);
     if (!userId) {
-      return NextResponse.json({ success: false, message: "Not authenticated" });
+      return NextResponse.json({
+        success: false,
+        message: "Not authenticated",
+      });
     }
 
     const { chatId, prompt } = await req.json();
 
     if (!chatId || !prompt) {
-      return NextResponse.json({ success: false, message: "Missing chatId or prompt" });
+      return NextResponse.json({
+        success: false,
+        message: "Missing chatId or prompt",
+      });
     }
 
-    await connectDB();
+    // ⚠️ FIX: Skip DB check for offline "owner-chat"
+    let chat;
 
-    // 🔥 Validate ID
-    let chat = await Chat.findOne({ _id: chatId, userId });
-
-    if (!chat) {
-      return NextResponse.json({ success: false, message: "Invalid chat ID" });
+    if (chatId === "owner-chat") {
+      chat = {
+        _id: "owner-chat",
+        userId: "owner",
+        messages: [],
+        save: () => {}, // fake save in offline mode
+      };
+    } else {
+      // Must be a valid DB chat ID
+      chat = await Chat.findOne({ _id: chatId, userId });
+      if (!chat) {
+        return NextResponse.json({
+          success: false,
+          message: "Invalid chat ID",
+        });
+      }
     }
 
     // Add user message
@@ -33,24 +53,30 @@ export async function POST(req) {
       timestamp: Date.now(),
     });
 
-    // AI CALL (GROQ)
-    const aiRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.GROQ_MODEL,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    // 🔥 CALL GROQ AI
+    const aiRes = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: process.env.GROQ_MODEL,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      }
+    );
 
     const aiData = await aiRes.json();
 
     if (aiData.error) {
       console.error("❌ Groq API Error:", aiData);
-      return NextResponse.json({ success: false, message: aiData.error.message });
+      return NextResponse.json({
+        success: false,
+        message: aiData.error.message,
+      });
     }
 
     const assistantMessage = {
@@ -60,15 +86,21 @@ export async function POST(req) {
     };
 
     chat.messages.push(assistantMessage);
-    await chat.save();
+
+    // Save if chat exists in DB
+    if (chatId !== "owner-chat") {
+      await chat.save();
+    }
 
     return NextResponse.json({
       success: true,
       data: assistantMessage,
     });
-
   } catch (err) {
     console.error("❌ AI route error:", err);
-    return NextResponse.json({ success: false, message: err.message });
+    return NextResponse.json({
+      success: false,
+      message: err.message,
+    });
   }
-                                   }
+}
