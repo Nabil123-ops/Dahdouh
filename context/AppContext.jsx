@@ -19,20 +19,20 @@ export const AppContextProvider = ({ children }) => {
   // 🚀 Create a new chat
   const createNewChat = async () => {
     try {
-      if (!user) return toast.error("You must log in first.");
+      if (!user) return;
 
       const token = await getToken();
 
       const res = await axios.post(
         "/api/chat/create",
         {},
-        { headers: { Authorization: `Bearer ${token}` } }
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
       );
 
       if (res.data.success) {
         await fetchUsersChats();
-      } else {
-        toast.error(res.data.message);
       }
     } catch (err) {
       console.error("Create chat error:", err);
@@ -40,44 +40,46 @@ export const AppContextProvider = ({ children }) => {
     }
   };
 
-  // 🚀 Fetch chats
+  // 🚀 Fetch user's chats
   const fetchUsersChats = async () => {
     try {
       if (!user) return;
 
       const token = await getToken();
 
-      const { data } = await axios.get("/api/chat/get", {
+      const res = await axios.get("/api/chat/get", {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (data.success) {
-        const list = data.data;
-        setChats(list);
+      if (res.data.success) {
+        const userChats = res.data.data;
 
-        // If no chats → create one
-        if (list.length === 0) {
+        setChats(userChats);
+
+        if (userChats.length === 0) {
           await createNewChat();
           return;
         }
 
-        // Sort chats by updated time
-        list.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+        // sort by recent
+        userChats.sort(
+          (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)
+        );
 
-        setSelectedChat(list[0]);
+        setSelectedChat(userChats[0]);
       }
     } catch (err) {
-      console.error("Get chats error:", err);
+      console.error("Fetch chats error:", err);
       toast.error("Failed to load chats");
     }
   };
 
-  // 🚀 React to login/logout
+  // 🚀 When user logs in/out
   useEffect(() => {
     if (user) {
       fetchUsersChats();
     } else {
-      // Offline "owner chat"
+      // offline owner chat
       const ownerChat = {
         _id: "owner-chat",
         name: "Owner Chat",
@@ -86,6 +88,26 @@ export const AppContextProvider = ({ children }) => {
       };
 
       setChats([ownerChat]);
+      setSelectedChat(ownerChat);
+    }
+  }, [user]);
+
+  const value = {
+    user,
+    chats,
+    setChats,
+    selectedChat,
+    setSelectedChat,
+    createNewChat,
+    fetchUsersChats,
+  };
+
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+    </AppContext.Provider>
+  );
+};      setChats([ownerChat]);
       setSelectedChat(ownerChat);
     }
   }, [user]);
