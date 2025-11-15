@@ -108,22 +108,3 @@ export const AppContextProvider = ({ children }) => {
     </AppContext.Provider>
   );
 };
-    fetchUsersChats,
-    createNewChat,
-  };
-
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-};  }, [user]);
-
-  const value = {
-    user,
-    chats,
-    setChats,
-    selectedChat,
-    setSelectedChat,
-    fetchUsersChats,
-    createNewChat,
-  };
-
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-};
