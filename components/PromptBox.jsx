@@ -4,45 +4,64 @@ import { assets } from "@/assets/assets";
 import { useAppContext } from "@/context/AppContext";
 import axios from "axios";
 import Image from "next/image";
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import toast from "react-hot-toast";
 
 const PromptBox = ({ isLoading, setIsLoading }) => {
   const [prompt, setPrompt] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
+  const fileInputRef = useRef();
 
   const { user, chats, setChats, selectedChat, setSelectedChat } =
     useAppContext();
 
-  // 📌 Store uploaded file (DO NOT SEND TO /api/upload)
-  const handleFileUpload = async (e) => {
+  // 📌 FILE PREVIEW ONLY (Blob)
+  const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setSelectedFile(file);
 
-    // Add image bubble preview
-    const fileMessage = {
+    const previewMsg = {
       role: "user",
       content: URL.createObjectURL(file),
       isImage: true,
       timestamp: Date.now(),
     };
 
+    setSelectedChat((prev) => ({
+      ...prev,
+      messages: [...prev.messages, previewMsg],
+    }));
+
     setChats((prev) =>
-      prev.map((chat) =>
-        chat._id === selectedChat._id
-          ? { ...chat, messages: [...chat.messages, fileMessage] }
-          : chat
+      prev.map((c) =>
+        c._id === selectedChat._id
+          ? { ...c, messages: [...c.messages, previewMsg] }
+          : c
       )
     );
 
-    setSelectedChat((prev) => ({
-      ...prev,
-      messages: [...prev.messages, fileMessage],
-    }));
-
     toast.success("Image added!");
+  };
+
+  const uploadToServer = async () => {
+    if (!selectedFile) return null;
+
+    try {
+      const form = new FormData();
+      form.append("file", selectedFile);
+
+      const res = await axios.post("/api/upload-image", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      if (res.data.success) return res.data.url;
+      return null;
+    } catch (err) {
+      console.log("Upload error:", err);
+      return null;
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -54,99 +73,103 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
   const sendPrompt = async (e) => {
     e.preventDefault();
-    const promptCopy = prompt.trim();
 
-    if (!promptCopy && !selectedFile)
-      return toast.error("Enter a message or upload an image");
+    if (!prompt.trim() && !selectedFile)
+      return toast.error("Write a message or upload an image");
 
-    if (!user) return toast.error("Please login first");
-    if (isLoading) return toast.error("Wait for previous message");
-    if (!selectedChat) return toast.error("Select or create a chat first");
+    if (!user) return toast.error("Please login");
+    if (isLoading) return toast.error("Wait for the AI to finish");
+    if (!selectedChat) return toast.error("Select or create a chat");
 
+    setIsLoading(true);
+
+    // Add user text message
+    let finalPrompt = prompt.trim();
+    setPrompt("");
+
+    if (finalPrompt) {
+      const userMsg = {
+        role: "user",
+        content: finalPrompt,
+        timestamp: Date.now(),
+      };
+
+      setSelectedChat((prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMsg],
+      }));
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c._id === selectedChat._id
+            ? { ...c, messages: [...c.messages, userMsg] }
+            : c
+        )
+      );
+    }
+
+    // 📌 Upload image FIRST (get public URL)
+    let uploadedImageURL = null;
+    if (selectedFile) {
+      uploadedImageURL = await uploadToServer();
+      setSelectedFile(null);
+      fileInputRef.current.value = null;
+    }
+
+    // 📌 Send message to AI
     try {
-      setIsLoading(true);
-      setPrompt("");
-
-      // Add user text message
-      if (promptCopy) {
-        const userPrompt = {
-          role: "user",
-          content: promptCopy,
-          timestamp: Date.now(),
-        };
-
-        setChats((prev) =>
-          prev.map((chat) =>
-            chat._id === selectedChat._id
-              ? { ...chat, messages: [...chat.messages, userPrompt] }
-              : chat
-          )
-        );
-
-        setSelectedChat((prev) => ({
-          ...prev,
-          messages: [...prev.messages, userPrompt],
-        }));
-      }
-
-      // 📌 CREATE multipart/form-data
-      const formData = new FormData();
-      formData.append("chatId", selectedChat._id);
-      formData.append("prompt", promptCopy);
-      if (selectedFile) formData.append("file", selectedFile);
-
-      // 📌 SEND FILE + PROMPT TO BACKEND
-      const res = await fetch("/api/chat/ai", {
-        method: "POST",
-        body: formData,
+      const res = await axios.post("/api/chat/ai", {
+        chatId: selectedChat._id,
+        prompt: finalPrompt,
+        image: uploadedImageURL, // FINAL FIX
       });
 
-      const data = await res.json();
-      setSelectedFile(null);
-
-      if (!data.success) {
-        toast.error(data.message || "Server error");
+      if (!res.data.success) {
+        toast.error(res.data.message);
+        setIsLoading(false);
         return;
       }
 
-      // AI response (typing effect)
-      const text = data.data.content;
-      const words = text.split(" ");
+      // AI typing effect
+      const fullText = res.data.data.content;
+      const words = fullText.split(" ");
 
-      let assistantMessage = {
+      let assistantMsg = {
         role: "assistant",
         content: "",
         timestamp: Date.now(),
       };
 
+      setSelectedChat((prev) => ({
+        ...prev,
+        messages: [...prev.messages, assistantMsg],
+      }));
+
       setChats((prev) =>
-        prev.map((chat) =>
-          chat._id === selectedChat._id
-            ? { ...chat, messages: [...chat.messages, assistantMessage] }
-            : chat
+        prev.map((c) =>
+          c._id === selectedChat._id
+            ? { ...c, messages: [...c.messages, assistantMsg] }
+            : c
         )
       );
 
-      setSelectedChat((prev) => ({
-        ...prev,
-        messages: [...prev.messages, assistantMessage],
-      }));
-
-      for (let i = 0; i < words.length; i++) {
+      // Typing animation
+      words.forEach((_, i) => {
         setTimeout(() => {
-          assistantMessage.content = words.slice(0, i + 1).join(" ");
-          setSelectedChat((prev) => {
-            const updated = [
+          assistantMsg.content = words.slice(0, i + 1).join(" ");
+
+          setSelectedChat((prev) => ({
+            ...prev,
+            messages: [
               ...prev.messages.slice(0, -1),
-              assistantMessage,
-            ];
-            return { ...prev, messages: updated };
-          });
+              { ...assistantMsg },
+            ],
+          }));
         }, i * 60);
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error("AI error");
+      });
+    } catch (err) {
+      console.error(err);
+      toast.error("AI server error");
     } finally {
       setIsLoading(false);
     }
@@ -179,6 +202,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
             type="file"
             accept="image/*"
             id="upload-input"
+            ref={fileInputRef}
             className="hidden"
             onChange={handleFileUpload}
           />
@@ -192,11 +216,17 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
           <button
             type="submit"
-            className={`${prompt || selectedFile ? "bg-primary" : "bg-[#71717a]"} rounded-full p-2`}
+            className={`${
+              prompt || selectedFile ? "bg-primary" : "bg-[#71717a]"
+            } rounded-full p-2`}
           >
             <Image
               className="w-3.5"
-              src={prompt || selectedFile ? assets.arrow_icon : assets.arrow_icon_dull}
+              src={
+                prompt || selectedFile
+                  ? assets.arrow_icon
+                  : assets.arrow_icon_dull
+              }
               alt="send"
             />
           </button>
