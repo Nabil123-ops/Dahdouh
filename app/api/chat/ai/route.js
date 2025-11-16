@@ -1,7 +1,7 @@
 // app/api/chat/ai/route.js
 import { NextResponse } from "next/server";
-import connectDB from "@/config/db";
-import Chat from "@/models/Chat";
+import connectDB from "@/config/db.js";               // <-- FIXED
+import Chat from "@/models/Chat.js";                  // <-- FIXED
 import { getAuth } from "@clerk/nextjs/server";
 
 export async function POST(req) {
@@ -19,16 +19,16 @@ export async function POST(req) {
     const contentType = req.headers.get("content-type") || "";
     let chatId, prompt, file, imageUrl;
 
-    // ---------- MULTIPART (image + text) ----------
+    // -------- MULTIPART (file + text) --------
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
       chatId = form.get("chatId");
       prompt = form.get("prompt");
       file = form.get("file");
-      imageUrl = form.get("imageUrl"); // <--- NEW
+      imageUrl = form.get("imageUrl"); // from Supabase
     }
 
-    // ---------- JSON (text only) ----------
+    // -------- JSON (text only) --------
     else {
       const body = await req.json();
       chatId = body.chatId;
@@ -43,7 +43,7 @@ export async function POST(req) {
       });
     }
 
-    // ---------- LOAD CHAT ----------
+    // -------- LOAD CHAT --------
     let chat;
 
     if (chatId === "owner-chat") {
@@ -63,7 +63,7 @@ export async function POST(req) {
       }
     }
 
-    // Save the user message
+    // Save user message
     chat.messages.push({
       role: "user",
       content: prompt,
@@ -72,7 +72,7 @@ export async function POST(req) {
 
     let aiResponseText = "";
 
-    // ---------- IMAGE DETECTED ----------
+    // -------- IMAGE HANDLING --------
     if (file || imageUrl) {
       const imageInput = file
         ? Buffer.from(await file.arrayBuffer()).toString("base64")
@@ -110,7 +110,7 @@ export async function POST(req) {
         "I could not understand the image.";
     }
 
-    // ---------- TEXT ONLY ----------
+    // -------- TEXT ONLY --------
     if (!file && !imageUrl) {
       const groqRes = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -139,7 +139,7 @@ export async function POST(req) {
       aiResponseText = groqData.choices[0].message.content;
     }
 
-    // ---------- SAVE AI MESSAGE ----------
+    // -------- SAVE AI MESSAGE --------
     const assistantMessage = {
       role: "assistant",
       content: aiResponseText,
@@ -163,4 +163,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-  }
+        }
