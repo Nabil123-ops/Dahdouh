@@ -8,7 +8,7 @@ export async function POST(req) {
   try {
     await connectDB();
 
-    // Check user
+    // --- AUTH ---
     const { userId } = getAuth(req);
     if (!userId) {
       return NextResponse.json({
@@ -17,11 +17,11 @@ export async function POST(req) {
       });
     }
 
-    // Read JSON ONLY (PromptBox uses axios JSON)
+    // --- READ JSON BODY ---
     const body = await req.json();
     const chatId = body.chatId;
     const prompt = body.prompt;
-    const imageUrl = body.image || null; // <-- PUBLIC SUPABASE URL
+    const imageUrl = body.image || null; // Public Supabase URL
 
     if (!chatId || !prompt) {
       return NextResponse.json({
@@ -30,16 +30,11 @@ export async function POST(req) {
       });
     }
 
-    // Load chat
+    // --- LOAD CHAT ---
     let chat;
 
     if (chatId === "owner-chat") {
-      chat = {
-        _id: "owner-chat",
-        userId,
-        messages: [],
-        save: () => {},
-      };
+      chat = { _id: "owner-chat", userId, messages: [], save: () => {} };
     } else {
       chat = await Chat.findOne({ _id: chatId, userId });
       if (!chat) {
@@ -50,7 +45,7 @@ export async function POST(req) {
       }
     }
 
-    // Save user message
+    // --- SAVE USER MESSAGE ---
     chat.messages.push({
       role: "user",
       content: prompt,
@@ -59,20 +54,18 @@ export async function POST(req) {
 
     let aiResponseText = "";
 
-    // ---------------------------------------------------------
-    // VISION MODE: IMAGE + TEXT --> HUGGINGFACE
-    // ---------------------------------------------------------
+    // =====================================================================
+    // 🔵 1. VISION MODE → HuggingFace (Salesforce/blip-vqa-base)
+    // =====================================================================
     if (imageUrl) {
-      // 1. Check for API Key presence for Hugging Face
-      if (!process.env.HUGGINGFACE_TOKEN || !process.env.HUGGINGFACE_VISION_MODEL) {
+      if (!process.env.HUGGINGFACE_TOKEN) {
         return NextResponse.json({
           success: false,
-          message: "Configuration Error: Hugging Face token or model is missing.",
+          message: "Missing HuggingFace Token",
         });
       }
 
-      // 2. Use the standard Hugging Face Inference API endpoint (FIX for 404)
-      const hfRes = await fetch(
+      const visionRes = await fetch(
         `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
         {
           method: "POST",
@@ -82,52 +75,41 @@ export async function POST(req) {
           },
           body: JSON.stringify({
             inputs: {
-              image: imageUrl, // <-- PUBLIC URL (IMPORTANT)
+              image: imageUrl, // PUBLIC URL — BLIP supports this
               question: prompt,
             },
           }),
         }
       );
-      
-      // 3. Robust error handling for non-200 responses (e.g., 404, 401)
-      if (!hfRes.ok) {
-          const errorText = await hfRes.text();
-          console.error(
-            "Hugging Face Vision API Error:", 
-            hfRes.status, 
-            "Raw Body:", 
-            errorText.slice(0, 150) + (errorText.length > 150 ? '...' : '')
-          );
 
-          return NextResponse.json({
-              success: false,
-              message: `Vision API failed (Status: ${hfRes.status}). Check the HUGGINGFACE_VISION_MODEL and HUGGINGFACE_TOKEN.`,
-          });
+      if (!visionRes.ok) {
+        const raw = await visionRes.text();
+        console.error("HF Vision Error:", raw);
+
+        return NextResponse.json({
+          success: false,
+          message: "HuggingFace vision model error. Check model name/token.",
+        });
       }
-      
-      const hfData = await hfRes.json();
-      console.log("HF DATA =====>", hfData);
 
-      if (hfData.error)
-        return NextResponse.json({ success: false, message: hfData.error });
+      const visionData = await visionRes.json();
 
       aiResponseText =
-        hfData.generated_text ||
-        hfData[0]?.generated_text ||
+        visionData.generated_text ||
+        visionData[0]?.generated_text ||
         "I could not understand the image.";
     }
 
-    // ---------------------------------------------------------
-    // TEXT-ONLY MODE --> GROQ
-    // ---------------------------------------------------------
+    // =====================================================================
+    // 🔵 2. TEXT MODE → Groq
+    // =====================================================================
     if (!imageUrl) {
-       // 1. Check for Groq API Key presence
-       if (!process.env.GROQ_API_KEY) {
-         return NextResponse.json({
-           success: false,
-           message: "Configuration Error: Groq API key (GROQ_API_KEY) is missing.",
-         });
-       }
+      if (!process.env.GROQ_API_KEY) {
+        return NextResponse.json({
+          success: false,
+          message: "Missing GROQ API Key",
+        });
+      }
 
       const groqRes = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -144,21 +126,10 @@ export async function POST(req) {
         }
       );
 
-      // 2. Robust error handling for Groq API (e.g., 401 Invalid Key)
-      if (!groqRes.ok) {
-        // Groq usually returns a structured JSON error body even on failure
-        const errorBody = await groqRes.json();
-        console.error("Groq API Response Error:", groqRes.status, errorBody);
-        
-        return NextResponse.json({ 
-          success: false, 
-          message: `Groq API Error [${groqRes.status}]: ${errorBody.error?.message || 'Unknown Groq error.'}` 
-        });
-      }
-
       const groqData = await groqRes.json();
 
       if (groqData.error) {
+        console.error("Groq Error:", groqData);
         return NextResponse.json({
           success: false,
           message: groqData.error.message,
@@ -168,7 +139,9 @@ export async function POST(req) {
       aiResponseText = groqData.choices[0].message.content;
     }
 
-    // Save AI message
+    // =====================================================================
+    // 🔵 SAVE ASSISTANT MESSAGE
+    // =====================================================================
     const assistantMessage = {
       role: "assistant",
       content: aiResponseText,
@@ -179,6 +152,7 @@ export async function POST(req) {
 
     if (chatId !== "owner-chat") await chat.save();
 
+    // SUCCESS
     return NextResponse.json({
       success: true,
       data: assistantMessage,
