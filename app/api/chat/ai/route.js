@@ -3,10 +3,15 @@ import connectDB from "@/config/db";
 import Chat from "@/models/Chat";
 import { getAuth } from "@clerk/nextjs/server";
 
+// HuggingFace Vision model (Moondream2)
+const HF_MODEL = "vikhyatk/moondream2";
+const HF_API = "https://router.huggingface.co/hf-inference";
+
 export async function POST(req) {
   try {
     await connectDB();
 
+    // Clerk authentication
     const { userId } = getAuth(req);
     if (!userId) {
       return NextResponse.json({
@@ -15,23 +20,11 @@ export async function POST(req) {
       });
     }
 
-    const contentType = req.headers.get("content-type");
-
-    let chatId, prompt, file = null;
-
-    // 🟢 CASE 1: FormData (prompt + file)
-    if (contentType && contentType.includes("multipart/form-data")) {
-      const form = await req.formData();
-      chatId = form.get("chatId");
-      prompt = form.get("prompt");
-      file = form.get("file"); // File object
-    } 
-    // 🟢 CASE 2: JSON (text only)
-    else {
-      const body = await req.json();
-      chatId = body.chatId;
-      prompt = body.prompt;
-    }
+    // Read multipart form-data
+    const formData = await req.formData();
+    const chatId = formData.get("chatId");
+    const prompt = formData.get("prompt");
+    const file = formData.get("file");
 
     if (!chatId || !prompt) {
       return NextResponse.json({
@@ -40,9 +33,11 @@ export async function POST(req) {
       });
     }
 
-    // Load chat
+    // Prepare chat object
     let chat;
+
     if (chatId === "owner-chat") {
+      // Offline mode – no DB
       chat = {
         _id: "owner-chat",
         userId,
@@ -51,6 +46,7 @@ export async function POST(req) {
       };
     } else {
       chat = await Chat.findOne({ _id: chatId, userId });
+
       if (!chat) {
         return NextResponse.json({
           success: false,
@@ -59,111 +55,104 @@ export async function POST(req) {
       }
     }
 
-    // Save user prompt message
+    // Save user message locally
     chat.messages.push({
       role: "user",
-      content: file ? `📷 Image + ${prompt}` : prompt,
+      content: prompt,
       timestamp: Date.now(),
     });
 
-    // =====================================================
-    // 🟣 1️⃣ IF IMAGE EXISTS → HuggingFace Vision (Moondream)
-    // =====================================================
+    let assistantReply = "";
 
+    // ============================
+    // 📌 IF IMAGE EXISTS → Use HF Vision
+    // ============================
     if (file) {
       const buffer = Buffer.from(await file.arrayBuffer());
       const base64Image = buffer.toString("base64");
 
-      const hfResponse = await fetch(
-        "https://router.huggingface.co/hf-inference",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: process.env.HUGGINGFACE_VISION_MODEL,
-            inputs: {
-              image: base64Image,
-              question: prompt,
-            },
-          }),
-        }
-      );
+      const hfPayload = {
+        inputs: {
+          image: base64Image,
+          question: prompt,
+        },
+      };
 
-      const hfData = await hfResponse.json();
+      const hfRes = await fetch(`${HF_API}/${HF_MODEL}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(hfPayload),
+      });
+
+      const hfData = await hfRes.json();
 
       if (hfData.error) {
+        console.error("❌ HuggingFace Vision Error:", hfData);
         return NextResponse.json({
           success: false,
           message: hfData.error,
         });
       }
 
-      const aiText =
+      assistantReply =
         hfData.generated_text ||
-        hfData.answer ||
         hfData[0]?.generated_text ||
-        JSON.stringify(hfData);
-
-      const assistantMessage = {
-        role: "assistant",
-        content: aiText,
-        timestamp: Date.now(),
-      };
-
-      chat.messages.push(assistantMessage);
-      if (chatId !== "owner-chat") await chat.save();
-
-      return NextResponse.json({
-        success: true,
-        data: assistantMessage,
-      });
+        "I analyzed the image, here are the results:\n" +
+          JSON.stringify(hfData);
     }
 
-    // =====================================================
-    // 🔵 2️⃣ IF TEXT ONLY → Groq AI
-    // =====================================================
+    // ============================
+    // 📌 IF NO IMAGE → Use Groq text
+    // ============================
+    else {
+      const groqRes = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: process.env.GROQ_MODEL,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        }
+      );
 
-    const groqRes = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: process.env.GROQ_MODEL,
-          messages: [{ role: "user", content: prompt }],
-        }),
+      const groqData = await groqRes.json();
+
+      if (groqData.error) {
+        console.error("❌ Groq API Error:", groqData);
+        return NextResponse.json({
+          success: false,
+          message: groqData.error.message,
+        });
       }
-    );
 
-    const groqData = await groqRes.json();
-
-    if (groqData.error) {
-      return NextResponse.json({
-        success: false,
-        message: groqData.error.message,
-      });
+      assistantReply = groqData.choices[0].message.content;
     }
 
+    // Save assistant message
     const assistantMessage = {
       role: "assistant",
-      content: groqData.choices[0].message.content,
+      content: assistantReply,
       timestamp: Date.now(),
     };
 
     chat.messages.push(assistantMessage);
-    if (chatId !== "owner-chat") await chat.save();
+
+    if (chatId !== "owner-chat") {
+      await chat.save();
+    }
 
     return NextResponse.json({
       success: true,
       data: assistantMessage,
     });
-
   } catch (err) {
     console.error("❌ AI route error:", err);
     return NextResponse.json({
@@ -171,4 +160,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-        }
+          }
