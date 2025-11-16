@@ -15,7 +15,9 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
   const { user, chats, setChats, selectedChat, setSelectedChat } =
     useAppContext();
 
-  // 📌 FILE PREVIEW ONLY (Blob)
+  // ============================
+  // 1️⃣ PREVIEW IMAGE (BLOB)
+  // ============================
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -24,11 +26,12 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
     const previewMsg = {
       role: "user",
-      content: URL.createObjectURL(file),
+      content: URL.createObjectURL(file), // for UI preview only
       isImage: true,
       timestamp: Date.now(),
     };
 
+    // UI preview in chat
     setSelectedChat((prev) => ({
       ...prev,
       messages: [...prev.messages, previewMsg],
@@ -45,6 +48,9 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     toast.success("Image added!");
   };
 
+  // ============================
+  // 2️⃣ UPLOAD TO SERVER (SUPABASE)
+  // ============================
   const uploadToServer = async () => {
     if (!selectedFile) return null;
 
@@ -59,7 +65,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       if (res.data.success) return res.data.url;
       return null;
     } catch (err) {
-      console.log("Upload error:", err);
+      console.error("Upload error:", err);
       return null;
     }
   };
@@ -71,6 +77,9 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     }
   };
 
+  // ============================
+  // 3️⃣ SEND PROMPT TO AI ROUTE
+  // ============================
   const sendPrompt = async (e) => {
     e.preventDefault();
 
@@ -78,12 +87,12 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       return toast.error("Write a message or upload an image");
 
     if (!user) return toast.error("Please login");
-    if (isLoading) return toast.error("Wait for the AI to finish");
+    if (isLoading) return toast.error("Wait until the AI finishes");
     if (!selectedChat) return toast.error("Select or create a chat");
 
     setIsLoading(true);
 
-    // Add user text message
+    // Save user text message
     let finalPrompt = prompt.trim();
     setPrompt("");
 
@@ -94,6 +103,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         timestamp: Date.now(),
       };
 
+      // Update UI
       setSelectedChat((prev) => ({
         ...prev,
         messages: [...prev.messages, userMsg],
@@ -108,20 +118,25 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       );
     }
 
-    // 📌 Upload image FIRST (get public URL)
+    // ============================
+    // 3.1 Upload image → get PUBLIC URL
+    // ============================
     let uploadedImageURL = null;
+
     if (selectedFile) {
       uploadedImageURL = await uploadToServer();
       setSelectedFile(null);
       fileInputRef.current.value = null;
     }
 
-    // 📌 Send message to AI
+    // ============================
+    // 3.2 Send to your AI route
+    // ============================
     try {
       const res = await axios.post("/api/chat/ai", {
         chatId: selectedChat._id,
         prompt: finalPrompt,
-        imageurl: uploadedImageURL, // FINAL FIX
+        image: uploadedImageURL, // IMPORTANT
       });
 
       if (!res.data.success) {
@@ -130,10 +145,10 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         return;
       }
 
-      // AI typing effect
-      const fullText = res.data.data.content;
-      const words = fullText.split(" ");
+      const text = res.data.data.content;
+      const words = text.split(" ");
 
+      // Placeholder assistant message
       let assistantMsg = {
         role: "assistant",
         content: "",
@@ -157,14 +172,13 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       words.forEach((_, i) => {
         setTimeout(() => {
           assistantMsg.content = words.slice(0, i + 1).join(" ");
-
-          setSelectedChat((prev) => ({
-            ...prev,
-            messages: [
+          setSelectedChat((prev) => {
+            const updated = [
               ...prev.messages.slice(0, -1),
               { ...assistantMsg },
-            ],
-          }));
+            ];
+            return { ...prev, messages: updated };
+          });
         }, i * 60);
       });
     } catch (err) {
@@ -199,10 +213,10 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
         <div className="flex items-center gap-3">
           <input
+            ref={fileInputRef}
             type="file"
             accept="image/*"
             id="upload-input"
-            ref={fileInputRef}
             className="hidden"
             onChange={handleFileUpload}
           />
