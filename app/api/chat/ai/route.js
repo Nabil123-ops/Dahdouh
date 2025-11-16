@@ -1,4 +1,3 @@
-// app/api/chat/ai/route.js
 import { NextResponse } from "next/server";
 import connectDB from "@/config/db";
 import Chat from "@/models/Chat";
@@ -10,23 +9,29 @@ export async function POST(req) {
 
     const { userId } = getAuth(req);
     if (!userId) {
-      return NextResponse.json({
-        success: false,
-        message: "Not authenticated",
-      });
+      return NextResponse.json({ success: false, message: "Not authenticated" });
     }
 
-    // Read form-data (text + optional file)
-    const form = await req.formData();
-    const chatId = form.get("chatId");
-    const prompt = form.get("prompt");
-    const file = form.get("file");
+    const contentType = req.headers.get("content-type");
+
+    let chatId, prompt, file = null;
+
+    // 🟢 CASE 1: Multiform (image + text)
+    if (contentType && contentType.includes("multipart/form-data")) {
+      const form = await req.formData();
+      chatId = form.get("chatId");
+      prompt = form.get("prompt");
+      file = form.get("file");
+    }
+    // 🟢 CASE 2: JSON (normal text)
+    else {
+      const body = await req.json();
+      chatId = body.chatId;
+      prompt = body.prompt;
+    }
 
     if (!chatId || !prompt) {
-      return NextResponse.json({
-        success: false,
-        message: "Missing chatId or prompt",
-      });
+      return NextResponse.json({ success: false, message: "Missing chatId or prompt" });
     }
 
     // Load chat
@@ -37,15 +42,12 @@ export async function POST(req) {
         _id: "owner-chat",
         userId,
         messages: [],
-        save: () => {}, // no-op
+        save: () => {},
       };
     } else {
       chat = await Chat.findOne({ _id: chatId, userId });
       if (!chat) {
-        return NextResponse.json({
-          success: false,
-          message: "Invalid chat ID",
-        });
+        return NextResponse.json({ success: false, message: "Invalid chat ID" });
       }
     }
 
@@ -56,24 +58,27 @@ export async function POST(req) {
       timestamp: Date.now(),
     });
 
-    // Build HuggingFace request
-    let hfBody;
+    // 🟢 Build HuggingFace input
+    let hfPayload;
 
     if (file) {
       const buffer = Buffer.from(await file.arrayBuffer());
-      const base64Img = buffer.toString("base64");
+      const base64Image = buffer.toString("base64");
 
-      hfBody = {
+      hfPayload = {
         inputs: {
-          image: base64Img,
+          image: base64Image,
           question: prompt,
         },
       };
     } else {
-      hfBody = { inputs: prompt };
+      // Normal text message
+      hfPayload = {
+        inputs: prompt,
+      };
     }
 
-    // Call HuggingFace
+    // 🟢 Call HuggingFace Vision/Text Model
     const hfRes = await fetch(
       `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
       {
@@ -82,48 +87,35 @@ export async function POST(req) {
           Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(hfBody),
+        body: JSON.stringify(hfPayload),
       }
     );
 
     const hfData = await hfRes.json();
 
     if (hfData.error) {
-      console.error("❌ HuggingFace Error:", hfData);
-      return NextResponse.json({
-        success: false,
-        message: hfData.error,
-      });
+      return NextResponse.json({ success: false, message: hfData.error });
     }
 
-    // Extract text response
-    const assistantText =
+    const aiText =
       hfData.generated_text ||
       hfData[0]?.generated_text ||
+      hfData.answer ||
       JSON.stringify(hfData);
 
     const assistantMessage = {
       role: "assistant",
-      content: assistantText,
+      content: aiText,
       timestamp: Date.now(),
     };
 
     chat.messages.push(assistantMessage);
 
-    if (chatId !== "owner-chat") {
-      await chat.save();
-    }
+    if (chatId !== "owner-chat") await chat.save();
 
-    return NextResponse.json({
-      success: true,
-      data: assistantMessage,
-    });
-
+    return NextResponse.json({ success: true, data: assistantMessage });
   } catch (err) {
     console.error("❌ AI route error:", err);
-    return NextResponse.json({
-      success: false,
-      message: err.message,
-    });
+    return NextResponse.json({ success: false, message: err.message });
   }
-      }
+  }
