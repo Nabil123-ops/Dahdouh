@@ -2,73 +2,26 @@
 
 import { assets } from "@/assets/assets";
 import { useAppContext } from "@/context/AppContext";
-import axios from "axios";
 import Image from "next/image";
 import React, { useState } from "react";
 import toast from "react-hot-toast";
 
 const PromptBox = ({ isLoading, setIsLoading }) => {
   const [prompt, setPrompt] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+
   const { user, chats, setChats, selectedChat, setSelectedChat } =
     useAppContext();
 
-  // 📌 Upload file handler
-  const handleFileUpload = async (e) => {
+  // 📌 File input handler (NO UPLOAD HERE!)
+  const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    if (!selectedChat?._id) {
-      return toast.error("⚠️ Please select or create a chat first.");
-    }
-
-    toast.loading("Uploading file...");
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      toast.dismiss();
-
-      if (!data.success) {
-        console.error(data.error);
-        return toast.error("Upload failed");
-      }
-
-      // Insert uploaded file URL into chat
-      const fileMessage = {
-        role: "user",
-        content: `📎 Uploaded file: ${data.url}`,
-        timestamp: Date.now(),
-      };
-
-      setChats((prev) =>
-        prev.map((chat) =>
-          chat._id === selectedChat._id
-            ? { ...chat, messages: [...chat.messages, fileMessage] }
-            : chat
-        )
-      );
-
-      setSelectedChat((prev) => ({
-        ...prev,
-        messages: [...prev.messages, fileMessage],
-      }));
-
-      toast.success("File uploaded!");
-
-    } catch (err) {
-      toast.dismiss();
-      console.error(err);
-      toast.error("Upload error");
-    }
+    setSelectedFile(file);
+    toast.success("Image selected — now type your question");
   };
 
+  // 📌 Send On Enter
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -76,95 +29,72 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     }
   };
 
+  // 📌 SEND MESSAGE (TEXT OR IMAGE+TEXT)
   const sendPrompt = async (e) => {
     e.preventDefault();
-    const promptCopy = prompt.trim();
 
     if (!user) return toast.error("Please login to send a message");
-    if (isLoading) return toast.error("Wait for the previous response");
-    if (!selectedChat || !selectedChat._id) {
+    if (!selectedChat?._id)
       return toast.error("⚠️ Please select or create a chat first");
-    }
-    if (!promptCopy) return toast.error("Prompt cannot be empty");
+    if (!prompt.trim()) return toast.error("Prompt cannot be empty");
+    if (isLoading) return;
+
+    const promptCopy = prompt.trim();
+    setPrompt("");
+    setIsLoading(true);
 
     try {
-      setIsLoading(true);
-      setPrompt("");
-
-      const userPrompt = {
+      // === 1️⃣ Insert user message in UI ===
+      const userMessage = {
         role: "user",
-        content: promptCopy,
+        content: selectedFile
+          ? `🖼 Image + "${promptCopy}"`
+          : promptCopy,
         timestamp: Date.now(),
+        image: selectedFile ? URL.createObjectURL(selectedFile) : null,
       };
-
-      // Add user message
-      setChats((prev) =>
-        prev.map((chat) =>
-          chat._id === selectedChat._id
-            ? { ...chat, messages: [...chat.messages, userPrompt] }
-            : chat
-        )
-      );
 
       setSelectedChat((prev) => ({
         ...prev,
-        messages: [...prev.messages, userPrompt],
+        messages: [...prev.messages, userMessage],
       }));
 
-      // Call backend AI
-      const { data } = await axios.post("/api/chat/ai", {
-        chatId: selectedChat._id,
-        prompt: promptCopy,
+      // === 2️⃣ Build FormData for backend ===
+      const formData = new FormData();
+      formData.append("chatId", selectedChat._id);
+      formData.append("prompt", promptCopy);
+      if (selectedFile) formData.append("file", selectedFile);
+
+      // === 3️⃣ Send to /api/chat/ai ===
+      const res = await fetch("/api/chat/ai", {
+        method: "POST",
+        body: formData,
       });
 
-      if (!data?.success) {
-        toast.error(data?.message || "Server error");
-        setPrompt(promptCopy);
+      const data = await res.json();
+
+      if (!data.success) {
+        toast.error(data.message);
         return;
       }
 
-      // AI message typing effect
-      const text = data.data.content;
-      const words = text.split(" ");
-
-      let assistantMessage = {
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-      };
-
-      setChats((prev) =>
-        prev.map((chat) =>
-          chat._id === selectedChat._id
-            ? { ...chat, messages: [...chat.messages, assistantMessage] }
-            : chat
-        )
-      );
+      // === 4️⃣ Add assistant message ===
+      const assistantMessage = data.data;
 
       setSelectedChat((prev) => ({
         ...prev,
         messages: [...prev.messages, assistantMessage],
       }));
 
-      for (let i = 0; i < words.length; i++) {
-        setTimeout(() => {
-          assistantMessage.content = words.slice(0, i + 1).join(" ");
-          setSelectedChat((prev) => {
-            const updated = [
-              ...prev.messages.slice(0, -1),
-              assistantMessage,
-            ];
-            return { ...prev, messages: updated };
-          });
-        }, i * 60);
-      }
-    } catch (error) {
-      console.error("❌ Prompt send error:", error);
-      toast.error(error.message || "Something went wrong");
-      setPrompt(promptCopy);
-    } finally {
-      setIsLoading(false);
+      // clean image
+      setSelectedFile(null);
+
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to send message");
     }
+
+    setIsLoading(false);
   };
 
   return (
@@ -178,7 +108,11 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         onKeyDown={handleKeyDown}
         className="outline-none w-full resize-none bg-transparent"
         rows={2}
-        placeholder="Message Dahdouh AI"
+        placeholder={
+          selectedFile
+            ? "Ask Dahdouh AI about the image…"
+            : "Message Dahdouh AI"
+        }
         required
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
@@ -197,13 +131,13 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         </div>
 
         <div className="flex items-center gap-3">
-
           {/* Hidden File Input */}
           <input
             type="file"
             id="upload-input"
             className="hidden"
             onChange={handleFileUpload}
+            accept="image/*"
           />
 
           {/* Upload Button */}
@@ -217,12 +151,12 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
           <button
             type="submit"
             className={`${
-              prompt ? "bg-primary" : "bg-[#71717a]"
+              prompt || selectedFile ? "bg-primary" : "bg-[#71717a]"
             } rounded-full p-2`}
           >
             <Image
               className="w-3.5"
-              src={prompt ? assets.arrow_icon : assets.arrow_icon_dull}
+              src={prompt || selectedFile ? assets.arrow_icon : assets.arrow_icon_dull}
               alt="send"
             />
           </button>
