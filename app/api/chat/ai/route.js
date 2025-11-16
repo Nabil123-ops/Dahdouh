@@ -16,7 +16,11 @@ export async function POST(req) {
       });
     }
 
-    const { chatId, prompt } = await req.json();
+    // Read form data (text + file)
+    const form = await req.formData();
+    const chatId = form.get("chatId");
+    const prompt = form.get("prompt");
+    const file = form.get("file"); // optional image
 
     if (!chatId || !prompt) {
       return NextResponse.json({
@@ -25,19 +29,21 @@ export async function POST(req) {
       });
     }
 
-    // ⚠️ FIX: Skip DB check for offline "owner-chat"
+    // ------------------------------
+    // 💾 Load or create chat
+    // ------------------------------
     let chat;
 
     if (chatId === "owner-chat") {
       chat = {
         _id: "owner-chat",
-        userId: "owner",
+        userId: userId,
         messages: [],
-        save: () => {}, // fake save in offline mode
+        save: () => {},
       };
     } else {
-      // Must be a valid DB chat ID
       chat = await Chat.findOne({ _id: chatId, userId });
+
       if (!chat) {
         return NextResponse.json({
           success: false,
@@ -46,46 +52,90 @@ export async function POST(req) {
       }
     }
 
-    // Add user message
+    // Save user message
     chat.messages.push({
       role: "user",
       content: prompt,
       timestamp: Date.now(),
     });
 
-    // 🔥 CALL GROQ AI
-    const aiRes = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
+    // ------------------------------
+    // 🔥 Build HuggingFace request
+    // ------------------------------
+    let messages = [
+      {
+        role: "user",
+        content: file
+          ? [
+              {
+                type: "input_text",
+                text: prompt,
+              },
+              {
+                type: "input_image",
+                image: await file.arrayBuffer(),
+              },
+            ]
+          : prompt,
+      },
+    ];
+
+    // ------------------------------
+    // ⚡ Call HuggingFace API
+    // ------------------------------
+    const hfRes = await fetch(
+      `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
       {
         method: "POST",
         headers: {
+          Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
         },
         body: JSON.stringify({
-          model: process.env.GROQ_MODEL,
-          messages: [{ role: "user", content: prompt }],
+          inputs: messages,
         }),
       }
     );
 
-    const aiData = await aiRes.json();
+    const hfData = await hfRes.json();
 
-    if (aiData.error) {
-      console.error("❌ Groq API Error:", aiData);
+    if (hfData.error) {
+      console.error("❌ HuggingFace Error:", hfData);
       return NextResponse.json({
         success: false,
-        message: aiData.error.message,
+        message: hfData.error,
       });
     }
 
+    const assistantText =
+      hfData.generated_text ||
+      hfData[0]?.generated_text ||
+      "I could not generate a response.";
+
     const assistantMessage = {
       role: "assistant",
-      content: aiData.choices[0].message.content,
+      content: assistantText,
       timestamp: Date.now(),
     };
 
     chat.messages.push(assistantMessage);
+
+    if (chatId !== "owner-chat") {
+      await chat.save();
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: assistantMessage,
+    });
+  } catch (err) {
+    console.error("❌ AI route error:", err);
+    return NextResponse.json({
+      success: false,
+      message: err.message,
+    });
+  }
+}    chat.messages.push(assistantMessage);
 
     // Save if chat exists in DB
     if (chatId !== "owner-chat") {
