@@ -1,7 +1,7 @@
 // app/api/chat/ai/route.js
 import { NextResponse } from "next/server";
-import connectDB from "@/config/db";
-import Chat from "@/models/Chat";
+import connectDB from "@/config/db.js";
+import Chat from "@/models/Chat.js";
 import { getAuth } from "@clerk/nextjs/server";
 
 export async function POST(req) {
