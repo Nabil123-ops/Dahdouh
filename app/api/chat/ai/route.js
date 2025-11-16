@@ -1,4 +1,3 @@
-// app/api/chat/ai/route.js
 import { NextResponse } from "next/server";
 import connectDB from "@/config/db.js";
 import Chat from "@/models/Chat.js";
@@ -80,6 +79,24 @@ export async function POST(req) {
         }
       );
 
+      // CRITICAL FIX: Check if the response was successful before trying to parse JSON.
+      // If it failed (404, 401, etc.), read the text error and return a structured JSON error.
+      if (!hfRes.ok) {
+          const errorText = await hfRes.text();
+          console.error(
+            "Hugging Face API Error:", 
+            hfRes.status, 
+            "Raw Body:", 
+            errorText
+          );
+
+          // Return a structured JSON error to the client to prevent the crash
+          return NextResponse.json({
+              success: false,
+              message: `Vision API failed (Status: ${hfRes.status}). The model might be incorrect (moondream2), or the HUGGINGFACE_TOKEN is invalid.`,
+          });
+      }
+      
       const hfData = await hfRes.json();
       console.log("HF DATA =====>", hfData);
 
@@ -145,4 +162,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-}
+          }
