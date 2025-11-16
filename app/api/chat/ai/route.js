@@ -16,7 +16,7 @@ export async function POST(req) {
       });
     }
 
-    // Read form-data (text + file)
+    // Read form-data (text + optional file)
     const form = await req.formData();
     const chatId = form.get("chatId");
     const prompt = form.get("prompt");
@@ -29,12 +29,13 @@ export async function POST(req) {
       });
     }
 
-    // Load chat or offline "owner"
+    // Load chat (offline chat allowed)
     let chat;
+
     if (chatId === "owner-chat") {
       chat = {
         _id: "owner-chat",
-        userId,
+        userId: userId,
         messages: [],
         save: () => {},
       };
@@ -48,44 +49,86 @@ export async function POST(req) {
       }
     }
 
-    // Save user message
+    // Save user text
     chat.messages.push({
       role: "user",
       content: prompt,
       timestamp: Date.now(),
     });
 
-    // Build HuggingFace body
+    // Prepare Hugging Face input
     let hfBody;
 
     if (file) {
-      // Convert file → base64
-      const buffer = Buffer.from(await file.arrayBuffer()).toString("base64");
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const base64Img = buffer.toString("base64");
 
       hfBody = {
-        inputs: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: prompt },
-              {
-                type: "image_url",
-                image_url: `data:${file.type};base64,${buffer}`,
-              },
-            ],
-          },
-        ],
+        inputs: {
+          image: base64Img,
+          question: prompt,
+        },
       };
     } else {
-      // Text only
       hfBody = {
-        inputs: [
-          {
-            role: "user",
-            content: [{ type: "input_text", text: prompt }],
-          },
-        ],
+        inputs: prompt,
       };
+    }
+
+    // Call HuggingFace API
+    const hfRes = await fetch(
+      `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(hfBody),
+      }
+    );
+
+    const hfData = await hfRes.json();
+
+    if (hfData.error) {
+      console.error("❌ HuggingFace Error:", hfData);
+      return NextResponse.json({
+        success: false,
+        message: hfData.error,
+      });
+    }
+
+    // Extract text
+    const assistantText =
+      hfData.generated_text ||
+      hfData[0]?.generated_text ||
+      JSON.stringify(hfData);
+
+    const assistantMessage = {
+      role: "assistant",
+      content: assistantText,
+      timestamp: Date.now(),
+    };
+
+    chat.messages.push(assistantMessage);
+
+    if (chatId !== "owner-chat") {
+      await chat.save();
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: assistantMessage,
+    });
+
+  } catch (err) {
+    console.error("❌ AI route error:", err);
+    return NextResponse.json({
+      success: false,
+      message: err.message,
+    });
+  }
+}      };
     }
 
     // Call HuggingFace
