@@ -1,30 +1,26 @@
+// app/api/chat/ai/route.js
+
 import { NextResponse } from "next/server";
 import connectDB from "@/config/db";
 import Chat from "@/models/Chat";
 import { getAuth } from "@clerk/nextjs/server";
 
-// HuggingFace Vision model (Moondream2)
-const HF_MODEL = "vikhyatk/moondream2";
-const HF_API = "https://router.huggingface.co/hf-inference";
+export const runtime = "edge"; // Faster & cheaper
 
 export async function POST(req) {
   try {
     await connectDB();
 
-    // Clerk authentication
     const { userId } = getAuth(req);
     if (!userId) {
-      return NextResponse.json({
-        success: false,
-        message: "Not authenticated",
-      });
+      return NextResponse.json({ success: false, message: "Not authenticated" });
     }
 
-    // Read multipart form-data
-    const formData = await req.formData();
-    const chatId = formData.get("chatId");
-    const prompt = formData.get("prompt");
-    const file = formData.get("file");
+    // Read form-data
+    const form = await req.formData();
+    const chatId = form.get("chatId");
+    const prompt = form.get("prompt");
+    const file = form.get("file");
 
     if (!chatId || !prompt) {
       return NextResponse.json({
@@ -33,81 +29,66 @@ export async function POST(req) {
       });
     }
 
-    // Prepare chat object
+    // Load chat (offline owner mode)
     let chat;
-
     if (chatId === "owner-chat") {
-      // Offline mode – no DB
-      chat = {
-        _id: "owner-chat",
-        userId,
-        messages: [],
-        save: () => {},
-      };
+      chat = { _id: "owner-chat", userId, messages: [], save: () => {} };
     } else {
       chat = await Chat.findOne({ _id: chatId, userId });
-
       if (!chat) {
-        return NextResponse.json({
-          success: false,
-          message: "Invalid chat ID",
-        });
+        return NextResponse.json({ success: false, message: "Invalid chat ID" });
       }
     }
 
-    // Save user message locally
+    // Save user message
     chat.messages.push({
       role: "user",
       content: prompt,
       timestamp: Date.now(),
     });
 
-    let assistantReply = "";
+    let assistantText = "";
 
-    // ============================
-    // 📌 IF IMAGE EXISTS → Use HF Vision
-    // ============================
+    // ----------------------------------------------------------------------
+    // IF IMAGE → USE MOONDREAM2 VISION MODEL
+    // ----------------------------------------------------------------------
     if (file) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const base64Image = buffer.toString("base64");
+      const bytes = await file.arrayBuffer();
+      const base64Image = Buffer.from(bytes).toString("base64");
 
-      const hfPayload = {
-        inputs: {
-          image: base64Image,
-          question: prompt,
-        },
-      };
+      const visionRes = await fetch(
+        `https://router.huggingface.co/hf-inference/${process.env.HF_VISION_MODEL}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.HF_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            inputs: {
+              image: base64Image,
+              question: prompt,
+            },
+          }),
+        }
+      );
 
-      const hfRes = await fetch(`${HF_API}/${HF_MODEL}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(hfPayload),
-      });
+      const visionData = await visionRes.json();
 
-      const hfData = await hfRes.json();
-
-      if (hfData.error) {
-        console.error("❌ HuggingFace Vision Error:", hfData);
-        return NextResponse.json({
-          success: false,
-          message: hfData.error,
-        });
+      if (visionData.error) {
+        console.error("HF Vision Error:", visionData);
+        return NextResponse.json({ success: false, message: visionData.error });
       }
 
-      assistantReply =
-        hfData.generated_text ||
-        hfData[0]?.generated_text ||
-        "I analyzed the image, here are the results:\n" +
-          JSON.stringify(hfData);
-    }
+      assistantText =
+        visionData.answer ||
+        visionData.generated_text ||
+        JSON.stringify(visionData);
 
-    // ============================
-    // 📌 IF NO IMAGE → Use Groq text
-    // ============================
-    else {
+    } else {
+      // ----------------------------------------------------------------------
+      // IF NO IMAGE → USE GROQ TEXT AI
+      // ----------------------------------------------------------------------
       const groqRes = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
         {
@@ -126,20 +107,17 @@ export async function POST(req) {
       const groqData = await groqRes.json();
 
       if (groqData.error) {
-        console.error("❌ Groq API Error:", groqData);
-        return NextResponse.json({
-          success: false,
-          message: groqData.error.message,
-        });
+        console.error("Groq Error:", groqData);
+        return NextResponse.json({ success: false, message: groqData.error });
       }
 
-      assistantReply = groqData.choices[0].message.content;
+      assistantText = groqData.choices[0].message.content;
     }
 
-    // Save assistant message
+    // Save AI message
     const assistantMessage = {
       role: "assistant",
-      content: assistantReply,
+      content: assistantText,
       timestamp: Date.now(),
     };
 
@@ -149,15 +127,9 @@ export async function POST(req) {
       await chat.save();
     }
 
-    return NextResponse.json({
-      success: true,
-      data: assistantMessage,
-    });
+    return NextResponse.json({ success: true, data: assistantMessage });
   } catch (err) {
-    console.error("❌ AI route error:", err);
-    return NextResponse.json({
-      success: false,
-      message: err.message,
-    });
+    console.error("AI route error:", err);
+    return NextResponse.json({ success: false, message: err.message });
   }
-          }
+        }
