@@ -121,7 +121,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       const res = await axios.post("/api/chat/ai", {
         chatId: selectedChat._id,
         prompt: finalPrompt,
-        image: uploadedImageURL, // FINAL FIX
+        imageurl: uploadedImageURL, // FINAL FIX
       });
 
       if (!res.data.success) {
