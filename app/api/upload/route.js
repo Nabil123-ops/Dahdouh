@@ -1,8 +1,10 @@
-// app/api/upload/route.js
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-export const runtime = "edge";
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 export async function POST(req) {
   try {
@@ -10,36 +12,25 @@ export async function POST(req) {
     const file = form.get("file");
 
     if (!file) {
-      return NextResponse.json({ success: false, error: "No file" });
+      return NextResponse.json({ success: false, error: "No file received" });
     }
 
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_KEY
-    );
+    const fileBuffer = Buffer.from(await file.arrayBuffer());
+    const fileName = `uploads/${Date.now()}-${file.name}`;
 
-    const safeName =
-      file.name.replace(/[^a-zA-Z0-9.\-_]/g, "") || "upload.jpg";
-    const fileName = Date.now() + "-" + safeName;
-
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    const { error } = await supabase.storage
-      .from(process.env.SUPABASE_BUCKET)
-      .upload(fileName, buffer, {
+    const { data, error } = await supabase.storage
+      .from("images")
+      .upload(fileName, fileBuffer, {
         contentType: file.type,
       });
 
-    if (error) {
-      console.error("Upload Error:", error);
-      return NextResponse.json({ success: false, error: error.message });
-    }
+    if (error) throw error;
 
-    const { data } = supabase.storage
-      .from(process.env.SUPABASE_BUCKET)
-      .getPublicUrl(fileName);
+    const publicUrl =
+      process.env.NEXT_PUBLIC_SUPABASE_URL +
+      `/storage/v1/object/public/images/${fileName}`;
 
-    return NextResponse.json({ success: true, url: data.publicUrl });
+    return NextResponse.json({ success: true, url: publicUrl });
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message });
   }
