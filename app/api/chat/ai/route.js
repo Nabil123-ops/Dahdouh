@@ -1,3 +1,4 @@
+// app/api/chat/ai/route.js
 import { NextResponse } from "next/server";
 import connectDB from "@/config/db.js";
 import Chat from "@/models/Chat.js";
@@ -62,8 +63,9 @@ export async function POST(req) {
     // VISION MODE: IMAGE + TEXT --> HUGGINGFACE
     // ---------------------------------------------------------
     if (imageUrl) {
+      // FIX: Changed from `https://router.huggingface.co/hf-inference/` to the standard Inference API endpoint.
       const hfRes = await fetch(
-        `https://router.huggingface.co/hf-inference/${process.env.HUGGINGFACE_VISION_MODEL}`,
+        `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
         {
           method: "POST",
           headers: {
@@ -79,30 +81,32 @@ export async function POST(req) {
         }
       );
 
-      // CRITICAL FIX: Check if the response was successful before trying to parse JSON.
-      // If it failed (404, 401, etc.), read the text error and return a structured JSON error.
+      // CRITICAL FIX: Robust error handling for non-200 responses (like 404 Not Found).
       if (!hfRes.ok) {
+          // Read the raw text response body for better debugging info
           const errorText = await hfRes.text();
           console.error(
-            "Hugging Face API Error:", 
+            "Hugging Face Vision API Error:", 
             hfRes.status, 
             "Raw Body:", 
-            errorText
+            errorText.slice(0, 150) + (errorText.length > 150 ? '...' : '')
           );
 
-          // Return a structured JSON error to the client to prevent the crash
+          // Return a structured JSON error to the client, preventing the JSON parse crash
           return NextResponse.json({
               success: false,
-              message: `Vision API failed (Status: ${hfRes.status}). The model might be incorrect (moondream2), or the HUGGINGFACE_TOKEN is invalid.`,
+              message: `Vision API failed (Status: ${hfRes.status}). Check the HUGGINGFACE_VISION_MODEL and HUGGINGFACE_TOKEN.`,
           });
       }
       
       const hfData = await hfRes.json();
       console.log("HF DATA =====>", hfData);
 
+      // Check for errors in the successful JSON body (e.g., model is loading)
       if (hfData.error)
         return NextResponse.json({ success: false, message: hfData.error });
 
+      // Extract response text
       aiResponseText =
         hfData.generated_text ||
         hfData[0]?.generated_text ||
@@ -127,6 +131,16 @@ export async function POST(req) {
           }),
         }
       );
+
+      // Robust error handling for Groq API
+      if (!groqRes.ok) {
+        const errorBody = await groqRes.json();
+        console.error("Groq API Response Error:", groqRes.status, errorBody);
+        return NextResponse.json({ 
+          success: false, 
+          message: `Groq API Error [${groqRes.status}]: ${errorBody.error?.message || 'Unknown Groq error.'}` 
+        });
+      }
 
       const groqData = await groqRes.json();
 
@@ -162,4 +176,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-          }
+                            }
