@@ -29,15 +29,15 @@ export async function POST(req) {
       });
     }
 
-    // Load chat (offline chat allowed)
+    // Load chat
     let chat;
 
     if (chatId === "owner-chat") {
       chat = {
         _id: "owner-chat",
-        userId: userId,
+        userId,
         messages: [],
-        save: () => {},
+        save: () => {}, // no-op
       };
     } else {
       chat = await Chat.findOne({ _id: chatId, userId });
@@ -49,14 +49,14 @@ export async function POST(req) {
       }
     }
 
-    // Save user text
+    // Save user message
     chat.messages.push({
       role: "user",
       content: prompt,
       timestamp: Date.now(),
     });
 
-    // Prepare Hugging Face input
+    // Build HuggingFace request
     let hfBody;
 
     if (file) {
@@ -70,18 +70,16 @@ export async function POST(req) {
         },
       };
     } else {
-      hfBody = {
-        inputs: prompt,
-      };
+      hfBody = { inputs: prompt };
     }
 
-    // Call HuggingFace API
+    // Call HuggingFace
     const hfRes = await fetch(
       `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
+          Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(hfBody),
@@ -98,7 +96,7 @@ export async function POST(req) {
       });
     }
 
-    // Extract text
+    // Extract text response
     const assistantText =
       hfData.generated_text ||
       hfData[0]?.generated_text ||
@@ -128,54 +126,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-}      };
-    }
-
-    // Call HuggingFace
-    const resHF = await fetch(
-      `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(hfBody),
       }
-    );
-
-    const hfData = await resHF.json();
-
-    if (hfData.error) {
-      console.error("❌ HuggingFace Error:", hfData);
-      return NextResponse.json({
-        success: false,
-        message: hfData.error,
-      });
-    }
-
-    const assistantText =
-      hfData?.generated_text ||
-      hfData?.[0]?.generated_text ||
-      JSON.stringify(hfData);
-
-    const assistantMessage = {
-      role: "assistant",
-      content: assistantText,
-      timestamp: Date.now(),
-    };
-
-    chat.messages.push(assistantMessage);
-
-    if (chatId !== "owner-chat") {
-      await chat.save();
-    }
-
-    return NextResponse.json({
-      success: true,
-      data: assistantMessage,
-    });
-  } catch (err) {
-    console.error("❌ AI route error:", err);
-    return NextResponse.json({
-      success
