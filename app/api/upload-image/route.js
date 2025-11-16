@@ -1,12 +1,10 @@
-// app/api/upload-image/route.js
 import { NextResponse } from "next/server";
-import { writeFile } from "fs/promises";
-import path from "path";
+import { createClient } from "@supabase/supabase-js";
 
 export async function POST(req) {
   try {
-    const formData = await req.formData();
-    const file = formData.get("file");
+    const form = await req.formData();
+    const file = form.get("file");
 
     if (!file) {
       return NextResponse.json({
@@ -15,28 +13,43 @@ export async function POST(req) {
       });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    // Convert file → buffer
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
 
-    // Create a unique filename
+    // Create unique filename
     const fileName = `upload-${Date.now()}-${file.name}`;
-    const filePath = path.join("/tmp", fileName);
 
-    // Save the image in Vercel temp folder
-    await writeFile(filePath, buffer);
+    // Supabase client
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
 
-    // Create a public URL through Vercel File System API
-    const publicUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/tmp?filename=${fileName}`;
+    // Upload to Supabase
+    const { data, error } = await supabase.storage
+      .from("images")
+      .upload(fileName, buffer, {
+        contentType: file.type,
+      });
+
+    if (error) {
+      console.error("Supabase upload error:", error);
+      return NextResponse.json({ success: false, message: error.message });
+    }
+
+    // Get public URL
+    const { data: publicData } = supabase.storage
+      .from("images")
+      .getPublicUrl(fileName);
 
     return NextResponse.json({
       success: true,
-      url: publicUrl,
-      filename: fileName,
+      url: publicData.publicUrl,  // <--- THIS IS WHAT AI NEEDS
     });
+
   } catch (err) {
-    console.error("Upload error:", err);
-    return NextResponse.json({
-      success: false,
-      message: err.message,
-    });
+    console.error("Upload Error:", err);
+    return NextResponse.json({ success: false, message: err.message });
   }
 }
