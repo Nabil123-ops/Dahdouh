@@ -4,8 +4,6 @@ import connectDB from "@/config/db";
 import Chat from "@/models/Chat";
 import { getAuth } from "@clerk/nextjs/server";
 
-export const runtime = "edge";
-
 export async function POST(req) {
   try {
     await connectDB();
@@ -15,19 +13,17 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: "Not authenticated" });
     }
 
-    // Detect text-only VS multipart
+    // Detect multipart for images
     const contentType = req.headers.get("content-type") || "";
 
     let chatId, prompt, file;
 
     if (contentType.includes("multipart/form-data")) {
-      // 📌 MULTIPART REQUEST (file + prompt)
       const form = await req.formData();
       chatId = form.get("chatId");
       prompt = form.get("prompt");
       file = form.get("file");
     } else {
-      // 📌 JSON REQUEST (text only)
       const body = await req.json();
       chatId = body.chatId;
       prompt = body.prompt;
@@ -40,7 +36,7 @@ export async function POST(req) {
       });
     }
 
-    // 🧠 Load chat
+    // Load chat
     let chat;
 
     if (chatId === "owner-chat") {
@@ -64,7 +60,7 @@ export async function POST(req) {
 
     let aiResponseText = "";
 
-    // 📌 If file exists → HuggingFace Vision (Moondream2)
+    // If file → Use HuggingFace Vision Model
     if (file) {
       const array = await file.arrayBuffer();
       const base64 = Buffer.from(array).toString("base64");
@@ -99,7 +95,7 @@ export async function POST(req) {
         "No response from vision model.";
     }
 
-    // 📌 If NO file → GROQ TEXT RESPONSE
+    // If text only → Groq text model
     if (!file) {
       const groqRes = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -129,7 +125,7 @@ export async function POST(req) {
       aiResponseText = groqData.choices[0].message.content;
     }
 
-    // Save AI message
+    // Save AI response
     const assistantMessage = {
       role: "assistant",
       content: aiResponseText,
@@ -141,8 +137,9 @@ export async function POST(req) {
     if (chatId !== "owner-chat") await chat.save();
 
     return NextResponse.json({ success: true, data: assistantMessage });
+
   } catch (err) {
     console.error("Route.js error:", err);
     return NextResponse.json({ success: false, message: err.message });
   }
-        }
+  }
