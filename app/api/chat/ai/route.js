@@ -63,7 +63,15 @@ export async function POST(req) {
     // VISION MODE: IMAGE + TEXT --> HUGGINGFACE
     // ---------------------------------------------------------
     if (imageUrl) {
-      // FIX: Changed from `https://router.huggingface.co/hf-inference/` to the standard Inference API endpoint.
+      // 1. Check for API Key presence for Hugging Face
+      if (!process.env.HUGGINGFACE_TOKEN || !process.env.HUGGINGFACE_VISION_MODEL) {
+        return NextResponse.json({
+          success: false,
+          message: "Configuration Error: Hugging Face token or model is missing.",
+        });
+      }
+
+      // 2. Use the standard Hugging Face Inference API endpoint (FIX for 404)
       const hfRes = await fetch(
         `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
         {
@@ -80,10 +88,9 @@ export async function POST(req) {
           }),
         }
       );
-
-      // CRITICAL FIX: Robust error handling for non-200 responses (like 404 Not Found).
+      
+      // 3. Robust error handling for non-200 responses (e.g., 404, 401)
       if (!hfRes.ok) {
-          // Read the raw text response body for better debugging info
           const errorText = await hfRes.text();
           console.error(
             "Hugging Face Vision API Error:", 
@@ -92,7 +99,6 @@ export async function POST(req) {
             errorText.slice(0, 150) + (errorText.length > 150 ? '...' : '')
           );
 
-          // Return a structured JSON error to the client, preventing the JSON parse crash
           return NextResponse.json({
               success: false,
               message: `Vision API failed (Status: ${hfRes.status}). Check the HUGGINGFACE_VISION_MODEL and HUGGINGFACE_TOKEN.`,
@@ -102,11 +108,9 @@ export async function POST(req) {
       const hfData = await hfRes.json();
       console.log("HF DATA =====>", hfData);
 
-      // Check for errors in the successful JSON body (e.g., model is loading)
       if (hfData.error)
         return NextResponse.json({ success: false, message: hfData.error });
 
-      // Extract response text
       aiResponseText =
         hfData.generated_text ||
         hfData[0]?.generated_text ||
@@ -117,6 +121,14 @@ export async function POST(req) {
     // TEXT-ONLY MODE --> GROQ
     // ---------------------------------------------------------
     if (!imageUrl) {
+       // 1. Check for Groq API Key presence
+       if (!process.env.GROQ_API_KEY) {
+         return NextResponse.json({
+           success: false,
+           message: "Configuration Error: Groq API key (GROQ_API_KEY) is missing.",
+         });
+       }
+
       const groqRes = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
         {
@@ -132,10 +144,12 @@ export async function POST(req) {
         }
       );
 
-      // Robust error handling for Groq API
+      // 2. Robust error handling for Groq API (e.g., 401 Invalid Key)
       if (!groqRes.ok) {
+        // Groq usually returns a structured JSON error body even on failure
         const errorBody = await groqRes.json();
         console.error("Groq API Response Error:", groqRes.status, errorBody);
+        
         return NextResponse.json({ 
           success: false, 
           message: `Groq API Error [${groqRes.status}]: ${errorBody.error?.message || 'Unknown Groq error.'}` 
@@ -176,4 +190,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-                            }
+        }
