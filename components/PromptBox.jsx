@@ -1,47 +1,45 @@
 "use client";
 
-import { useState, useRef } from "react";
 import { assets } from "@/assets/assets";
 import { useAppContext } from "@/context/AppContext";
 import axios from "axios";
 import Image from "next/image";
+import React, { useState, useRef } from "react";
 import toast from "react-hot-toast";
 
 const PromptBox = ({ isLoading, setIsLoading }) => {
   const [prompt, setPrompt] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
-
   const fileInputRef = useRef();
 
   const { user, chats, setChats, selectedChat, setSelectedChat } =
     useAppContext();
 
-  // =====================================================
-  // 1️⃣ Image Upload (Preview Only)
-  // =====================================================
+  // ========================================================
+  // 1️⃣ PREVIEW ONLY (BLOB) — NOT SENT TO SERVER
+  // ========================================================
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setSelectedFile(file);
 
-    // Preview image bubble
-    const fileMsg = {
+    const previewMsg = {
       role: "user",
-      content: URL.createObjectURL(file),
+      content: URL.createObjectURL(file), // <--- BLOB ONLY FOR PREVIEW
       isImage: true,
       timestamp: Date.now(),
     };
 
     setSelectedChat((prev) => ({
       ...prev,
-      messages: [...prev.messages, fileMsg],
+      messages: [...prev.messages, previewMsg],
     }));
 
     setChats((prev) =>
       prev.map((c) =>
         c._id === selectedChat._id
-          ? { ...c, messages: [...c.messages, fileMsg] }
+          ? { ...c, messages: [...c.messages, previewMsg] }
           : c
       )
     );
@@ -49,9 +47,9 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     toast.success("Image added!");
   };
 
-  // =====================================================
-  // 2️⃣ Upload to Supabase (Server)
-  // =====================================================
+  // ========================================================
+  // 2️⃣ UPLOAD TO SERVER → RETURN PUBLIC URL (SUPABASE)
+  // ========================================================
   const uploadToServer = async () => {
     if (!selectedFile) return null;
 
@@ -64,6 +62,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       });
 
       if (res.data.success) return res.data.url;
+
       return null;
     } catch (err) {
       console.error("Upload error:", err);
@@ -71,7 +70,6 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     }
   };
 
-  // ENTER to send
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -79,27 +77,27 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     }
   };
 
-  // =====================================================
-  // 3️⃣ SEND PROMPT TO AI
-  // =====================================================
+  // ========================================================
+  // 3️⃣ SEND PROMPT TO AI ROUTE
+  // ========================================================
   const sendPrompt = async (e) => {
     e.preventDefault();
 
     if (!prompt.trim() && !selectedFile)
       return toast.error("Write a message or upload an image");
 
-    if (!user) return toast.error("Please login");
-    if (isLoading) return toast.error("Wait until AI finishes");
-    if (!selectedChat) return toast.error("Select or create a chat first");
+    if (!user) return toast.error("Please login first");
+    if (isLoading) return toast.error("Wait for the AI");
+    if (!selectedChat) return toast.error("Select or create a chat");
 
     setIsLoading(true);
 
-    const finalPrompt = prompt.trim();
+    // --- Save user text locally ---
+    let finalPrompt = prompt.trim();
     setPrompt("");
 
-    // Save user text
     if (finalPrompt) {
-      const msg = {
+      const userMsg = {
         role: "user",
         content: finalPrompt,
         timestamp: Date.now(),
@@ -107,37 +105,33 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
       setSelectedChat((prev) => ({
         ...prev,
-        messages: [...prev.messages, msg],
+        messages: [...prev.messages, userMsg],
       }));
 
       setChats((prev) =>
         prev.map((c) =>
           c._id === selectedChat._id
-            ? { ...c, messages: [...c.messages, msg] }
+            ? { ...c, messages: [...c.messages, userMsg] }
             : c
         )
       );
     }
 
-    // ============================
-    // 3.1 Upload image → Get URL
-    // ============================
+    // --- Upload image & get public URL ---
     let uploadedImageURL = null;
 
     if (selectedFile) {
       uploadedImageURL = await uploadToServer();
       setSelectedFile(null);
-      fileInputRef.current.value = null;
+      fileInputRef.current.value = "";
     }
 
-    // ============================
-    // 3.2 Send to AI backend
-    // ============================
+    // --- Send to AI (FINAL FIX) ---
     try {
       const res = await axios.post("/api/chat/ai", {
         chatId: selectedChat._id,
         prompt: finalPrompt,
-        image: uploadedImageURL, // <-- IMPORTANT
+        image: uploadedImageURL, // REAL PUBLIC URL
       });
 
       if (!res.data.success) {
@@ -155,7 +149,6 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         timestamp: Date.now(),
       };
 
-      // Add empty assistant message (typing effect)
       setSelectedChat((prev) => ({
         ...prev,
         messages: [...prev.messages, assistantMsg],
@@ -173,14 +166,13 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       words.forEach((_, i) => {
         setTimeout(() => {
           assistantMsg.content = words.slice(0, i + 1).join(" ");
-
-          setSelectedChat((prev) => {
-            const updated = [
+          setSelectedChat((prev) => ({
+            ...prev,
+            messages: [
               ...prev.messages.slice(0, -1),
               { ...assistantMsg },
-            ];
-            return { ...prev, messages: updated };
-          });
+            ],
+          }));
         }, i * 60);
       });
     } catch (err) {
@@ -191,9 +183,6 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     }
   };
 
-  // =====================================================
-  // 4️⃣ UI
-  // =====================================================
   return (
     <form
       onSubmit={sendPrompt}
@@ -209,12 +198,10 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       />
 
       <div className="flex items-center justify-between text-sm">
-        <div className="flex items-center gap-2">
-          <p className="flex items-center gap-2 text-xs border border-gray-300/40 px-2 py-1 rounded-full">
-            <Image className="h-5" src={assets.deepthink_icon} alt="" />
-            DeepThink (R1)
-          </p>
-        </div>
+        <p className="flex items-center gap-2 text-xs border border-gray-300/40 px-2 py-1 rounded-full">
+          <Image className="h-5" src={assets.deepthink_icon} alt="" />
+          DeepThink (R1)
+        </p>
 
         <div className="flex items-center gap-3">
           <input
