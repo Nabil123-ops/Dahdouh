@@ -8,6 +8,7 @@ export async function POST(req) {
   try {
     await connectDB();
 
+    // Check user
     const { userId } = getAuth(req);
     if (!userId) {
       return NextResponse.json({
@@ -16,11 +17,11 @@ export async function POST(req) {
       });
     }
 
-    // -------- JSON INPUT (PromptBox sends this) --------
+    // Read JSON ONLY (PromptBox uses axios JSON)
     const body = await req.json();
     const chatId = body.chatId;
     const prompt = body.prompt;
-    const imageUrl = body.image || null;  // <---- IMPORTANT FIX
+    const imageUrl = body.image || null; // <-- PUBLIC SUPABASE URL
 
     if (!chatId || !prompt) {
       return NextResponse.json({
@@ -29,7 +30,7 @@ export async function POST(req) {
       });
     }
 
-    // -------- LOAD CHAT --------
+    // Load chat
     let chat;
 
     if (chatId === "owner-chat") {
@@ -49,7 +50,7 @@ export async function POST(req) {
       }
     }
 
-    // -------- SAVE USER TEXT MESSAGE --------
+    // Save user message
     chat.messages.push({
       role: "user",
       content: prompt,
@@ -58,7 +59,9 @@ export async function POST(req) {
 
     let aiResponseText = "";
 
-    // =============== IMAGE + TEXT TO VISION MODEL ===============
+    // ---------------------------------------------------------
+    // VISION MODE: IMAGE + TEXT --> HUGGINGFACE
+    // ---------------------------------------------------------
     if (imageUrl) {
       const hfRes = await fetch(
         `https://router.huggingface.co/hf-inference/${process.env.HUGGINGFACE_VISION_MODEL}`,
@@ -70,7 +73,7 @@ export async function POST(req) {
           },
           body: JSON.stringify({
             inputs: {
-              image: imageUrl,   // <---- FIX: PUBLIC URL
+              image: imageUrl, // <-- PUBLIC URL (IMPORTANT)
               question: prompt,
             },
           }),
@@ -78,13 +81,10 @@ export async function POST(req) {
       );
 
       const hfData = await hfRes.json();
+      console.log("HF DATA =====>", hfData);
 
-      if (hfData.error) {
-        return NextResponse.json({
-          success: false,
-          message: hfData.error,
-        });
-      }
+      if (hfData.error)
+        return NextResponse.json({ success: false, message: hfData.error });
 
       aiResponseText =
         hfData.generated_text ||
@@ -92,7 +92,9 @@ export async function POST(req) {
         "I could not understand the image.";
     }
 
-    // =============== TEXT ONLY ===============
+    // ---------------------------------------------------------
+    // TEXT-ONLY MODE --> GROQ
+    // ---------------------------------------------------------
     if (!imageUrl) {
       const groqRes = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -121,7 +123,7 @@ export async function POST(req) {
       aiResponseText = groqData.choices[0].message.content;
     }
 
-    // -------- SAVE AI RESPONSE --------
+    // Save AI message
     const assistantMessage = {
       role: "assistant",
       content: aiResponseText,
@@ -130,15 +132,12 @@ export async function POST(req) {
 
     chat.messages.push(assistantMessage);
 
-    if (chatId !== "owner-chat") {
-      await chat.save();
-    }
+    if (chatId !== "owner-chat") await chat.save();
 
     return NextResponse.json({
       success: true,
       data: assistantMessage,
     });
-
   } catch (err) {
     console.error("AI Route Error:", err);
     return NextResponse.json({
