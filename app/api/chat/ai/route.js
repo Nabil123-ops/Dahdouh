@@ -16,7 +16,7 @@ export async function POST(req) {
       });
     }
 
-    // Read form data (text + file)
+    // Read form-data (text + file)
     const form = await req.formData();
     const chatId = form.get("chatId");
     const prompt = form.get("prompt");
@@ -29,19 +29,17 @@ export async function POST(req) {
       });
     }
 
-    // Load or create chat
+    // Load chat or offline "owner"
     let chat;
-
     if (chatId === "owner-chat") {
       chat = {
         _id: "owner-chat",
-        userId: userId,
+        userId,
         messages: [],
         save: () => {},
       };
     } else {
       chat = await Chat.findOne({ _id: chatId, userId });
-
       if (!chat) {
         return NextResponse.json({
           success: false,
@@ -57,27 +55,41 @@ export async function POST(req) {
       timestamp: Date.now(),
     });
 
-    // Build HuggingFace request
-    let hfInput;
+    // Build HuggingFace body
+    let hfBody;
 
     if (file) {
-      const imageBuffer = await file.arrayBuffer();
-      const base64Image = Buffer.from(imageBuffer).toString("base64");
+      // Convert file → base64
+      const buffer = Buffer.from(await file.arrayBuffer()).toString("base64");
 
-      hfInput = {
-        inputs: {
-          image: base64Image,
-          question: prompt,
-        },
+      hfBody = {
+        inputs: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: prompt },
+              {
+                type: "image_url",
+                image_url: `data:${file.type};base64,${buffer}`,
+              },
+            ],
+          },
+        ],
       };
     } else {
-      hfInput = {
-        inputs: prompt,
+      // Text only
+      hfBody = {
+        inputs: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: prompt }],
+          },
+        ],
       };
     }
 
-    // Call HuggingFace API
-    const hfRes = await fetch(
+    // Call HuggingFace
+    const resHF = await fetch(
       `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
       {
         method: "POST",
@@ -85,11 +97,11 @@ export async function POST(req) {
           Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(hfInput),
+        body: JSON.stringify(hfBody),
       }
     );
 
-    const hfData = await hfRes.json();
+    const hfData = await resHF.json();
 
     if (hfData.error) {
       console.error("❌ HuggingFace Error:", hfData);
@@ -100,8 +112,8 @@ export async function POST(req) {
     }
 
     const assistantText =
-      hfData.generated_text ||
-      hfData[0]?.generated_text ||
+      hfData?.generated_text ||
+      hfData?.[0]?.generated_text ||
       JSON.stringify(hfData);
 
     const assistantMessage = {
@@ -123,8 +135,4 @@ export async function POST(req) {
   } catch (err) {
     console.error("❌ AI route error:", err);
     return NextResponse.json({
-      success: false,
-      message: err.message,
-    });
-  }
-        }
+      success
