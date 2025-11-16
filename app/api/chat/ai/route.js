@@ -20,7 +20,7 @@ export async function POST(req) {
     const form = await req.formData();
     const chatId = form.get("chatId");
     const prompt = form.get("prompt");
-    const file = form.get("file"); // optional image
+    const file = form.get("file");
 
     if (!chatId || !prompt) {
       return NextResponse.json({
@@ -29,9 +29,7 @@ export async function POST(req) {
       });
     }
 
-    // ------------------------------
-    // 💾 Load or create chat
-    // ------------------------------
+    // Load or create chat
     let chat;
 
     if (chatId === "owner-chat") {
@@ -59,30 +57,26 @@ export async function POST(req) {
       timestamp: Date.now(),
     });
 
-    // ------------------------------
-    // 🔥 Build HuggingFace request
-    // ------------------------------
-    let messages = [
-      {
-        role: "user",
-        content: file
-          ? [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_image",
-                image: await file.arrayBuffer(),
-              },
-            ]
-          : prompt,
-      },
-    ];
+    // Build HuggingFace request
+    let hfInput;
 
-    // ------------------------------
-    // ⚡ Call HuggingFace API
-    // ------------------------------
+    if (file) {
+      const imageBuffer = await file.arrayBuffer();
+      const base64Image = Buffer.from(imageBuffer).toString("base64");
+
+      hfInput = {
+        inputs: {
+          image: base64Image,
+          question: prompt,
+        },
+      };
+    } else {
+      hfInput = {
+        inputs: prompt,
+      };
+    }
+
+    // Call HuggingFace API
     const hfRes = await fetch(
       `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
       {
@@ -91,9 +85,7 @@ export async function POST(req) {
           Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          inputs: messages,
-        }),
+        body: JSON.stringify(hfInput),
       }
     );
 
@@ -110,7 +102,7 @@ export async function POST(req) {
     const assistantText =
       hfData.generated_text ||
       hfData[0]?.generated_text ||
-      "I could not generate a response.";
+      JSON.stringify(hfData);
 
     const assistantMessage = {
       role: "assistant",
@@ -135,22 +127,4 @@ export async function POST(req) {
       message: err.message,
     });
   }
-}    chat.messages.push(assistantMessage);
-
-    // Save if chat exists in DB
-    if (chatId !== "owner-chat") {
-      await chat.save();
-    }
-
-    return NextResponse.json({
-      success: true,
-      data: assistantMessage,
-    });
-  } catch (err) {
-    console.error("❌ AI route error:", err);
-    return NextResponse.json({
-      success: false,
-      message: err.message,
-    });
-  }
-}
+        }
