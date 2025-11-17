@@ -7,22 +7,20 @@ import Chat from "@/models/Chat";
 import { getAuth } from "@clerk/nextjs/server";
 
 // 🔥 Groq client
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-
-export async function POST(req) {
-  try {
-    // Connect DB
-    await connectDB();
-
-    // Get user session
-    const { userId } = getAuth(req);
-    if (!userId) {
-      return NextResponse.json({
-        success: false,
-        message: "Unauthorized",
-      });
-    }
-
+const groqRes = await fetch("https://api.groq.com/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+  },
+  body: JSON.stringify({
+    model: "llama3-70b-8192",
+    messages: [
+      { role: "system", content: "You are Dahdouh AI assistant." },
+      { role: "user", content: message },
+    ],
+  }),
+});
     // Get user message
     const { message } = await req.json();
     if (!message || message.trim() === "") {
