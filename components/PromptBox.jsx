@@ -15,9 +15,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
   const { user, chats, setChats, selectedChat, setSelectedChat } =
     useAppContext();
 
-  // ========================================================
-  // 1️⃣ PREVIEW ONLY (BLOB) — NOT SENT TO SERVER
-  // ========================================================
+  // File preview
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -26,7 +24,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
     const previewMsg = {
       role: "user",
-      content: URL.createObjectURL(file), // <--- BLOB ONLY FOR PREVIEW
+      content: URL.createObjectURL(file),
       isImage: true,
       timestamp: Date.now(),
     };
@@ -47,9 +45,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     toast.success("Image added!");
   };
 
-  // ========================================================
-  // 2️⃣ UPLOAD TO SERVER → RETURN PUBLIC URL (SUPABASE)
-  // ========================================================
+  // Upload to API route (Supabase)
   const uploadToServer = async () => {
     if (!selectedFile) return null;
 
@@ -61,11 +57,8 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      if (res.data.success) return res.data.url;
-
-      return null;
-    } catch (err) {
-      console.error("Upload error:", err);
+      return res.data.success ? res.data.url : null;
+    } catch {
       return null;
     }
   };
@@ -77,23 +70,20 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
     }
   };
 
-  // ========================================================
-  // 3️⃣ SEND PROMPT TO AI ROUTE
-  // ========================================================
+  // Send Prompt
   const sendPrompt = async (e) => {
     e.preventDefault();
 
     if (!prompt.trim() && !selectedFile)
       return toast.error("Write a message or upload an image");
 
-    if (!user) return toast.error("Please login first");
-    if (isLoading) return toast.error("Wait for the AI");
-    if (!selectedChat) return toast.error("Select or create a chat");
+    if (!user) return toast.error("Login required");
+    if (isLoading) return toast.error("Wait...");
+    if (!selectedChat) return toast.error("Select a chat");
 
     setIsLoading(true);
 
-    // --- Save user text locally ---
-    let finalPrompt = prompt.trim();
+    const finalPrompt = prompt.trim();
     setPrompt("");
 
     if (finalPrompt) {
@@ -107,40 +97,28 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         ...prev,
         messages: [...prev.messages, userMsg],
       }));
-
-      setChats((prev) =>
-        prev.map((c) =>
-          c._id === selectedChat._id
-            ? { ...c, messages: [...c.messages, userMsg] }
-            : c
-        )
-      );
     }
 
-    // --- Upload image & get public URL ---
     let uploadedImageURL = null;
-
     if (selectedFile) {
       uploadedImageURL = await uploadToServer();
       setSelectedFile(null);
       fileInputRef.current.value = "";
     }
 
-    // --- Send to AI (FINAL FIX) ---
     try {
       const res = await axios.post("/api/chat/ai", {
-        chatId: selectedChat._id,
-        prompt: finalPrompt,
-        image: uploadedImageURL, // REAL PUBLIC URL
+        message: finalPrompt,
+        image: uploadedImageURL,
       });
 
       if (!res.data.success) {
-        toast.error(res.data.message);
+        toast.error(res.data.error || "AI Error");
         setIsLoading(false);
         return;
       }
 
-      const text = res.data.data.content;
+      const text = res.data.reply;
       const words = text.split(" ");
 
       let assistantMsg = {
@@ -149,36 +127,29 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         timestamp: Date.now(),
       };
 
+      // Add empty assistant bubble
       setSelectedChat((prev) => ({
         ...prev,
         messages: [...prev.messages, assistantMsg],
       }));
 
-      setChats((prev) =>
-        prev.map((c) =>
-          c._id === selectedChat._id
-            ? { ...c, messages: [...c.messages, assistantMsg] }
-            : c
-        )
-      );
-
       // Typing animation
       words.forEach((_, i) => {
         setTimeout(() => {
           assistantMsg.content = words.slice(0, i + 1).join(" ");
-          setSelectedChat((prev) => ({
-            ...prev,
-            messages: [
-              ...prev.messages.slice(0, -1),
-              { ...assistantMsg },
-            ],
-          }));
+
+          setSelectedChat((prev) => {
+            const updated = [...prev.messages];
+            updated[updated.length - 1] = { ...assistantMsg };
+            return { ...prev, messages: updated };
+          });
         }, i * 60);
       });
+
+      // Stop loading
+      setTimeout(() => setIsLoading(false), words.length * 60);
     } catch (err) {
-      console.error(err);
       toast.error("AI server error");
-    } finally {
       setIsLoading(false);
     }
   };
