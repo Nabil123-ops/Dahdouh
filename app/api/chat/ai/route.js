@@ -1,167 +1,105 @@
 // app/api/chat/ai/route.js
+"use server";
+
 import { NextResponse } from "next/server";
-import connectDB from "@/config/db.js";
-import Chat from "@/models/Chat.js";
+import connectDB from "@/config/db";
+import Chat from "@/models/Chat";
 import { getAuth } from "@clerk/nextjs/server";
+
+// 🔥 Groq client
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 export async function POST(req) {
   try {
+    // Connect DB
     await connectDB();
 
-    // --- AUTH ---
+    // Get user session
     const { userId } = getAuth(req);
     if (!userId) {
       return NextResponse.json({
         success: false,
-        message: "Not authenticated",
+        message: "Unauthorized",
       });
     }
 
-    // --- READ JSON BODY ---
-    const body = await req.json();
-    const chatId = body.chatId;
-    const prompt = body.prompt;
-    const imageUrl = body.image || null; // Public Supabase URL
-
-    if (!chatId || !prompt) {
+    // Get user message
+    const { message } = await req.json();
+    if (!message || message.trim() === "") {
       return NextResponse.json({
         success: false,
-        message: "Missing chatId or prompt",
+        message: "Message cannot be empty",
       });
     }
 
-    // --- LOAD CHAT ---
-    let chat;
-
-    if (chatId === "owner-chat") {
-      chat = { _id: "owner-chat", userId, messages: [], save: () => {} };
-    } else {
-      chat = await Chat.findOne({ _id: chatId, userId });
-      if (!chat) {
-        return NextResponse.json({
-          success: false,
-          message: "Invalid chat ID",
-        });
-      }
-    }
-
-    // --- SAVE USER MESSAGE ---
-    chat.messages.push({
-      role: "user",
-      content: prompt,
-      timestamp: Date.now(),
+    // -----------------------------
+    // 1. GROQ RESPONSE
+    // -----------------------------
+    const groqRes = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "llama3-70b-8192",
+        messages: [
+          { role: "system", content: "You are Dahdouh AI assistant." },
+          { role: "user", content: message },
+        ],
+      }),
     });
 
-    let aiResponseText = "";
+    const groqData = await groqRes.json();
 
-    // =====================================================================
-    // 🔵 1. VISION MODE → HuggingFace (Salesforce/blip-vqa-base)
-    // =====================================================================
-    if (imageUrl) {
-      if (!process.env.HUGGINGFACE_TOKEN) {
-        return NextResponse.json({
-          success: false,
-          message: "Missing HuggingFace Token",
-        });
-      }
+    if (!groqData?.choices?.[0]?.message?.content) {
+      throw new Error("Groq API returned invalid format");
+    }
 
-      const visionRes = await fetch(
-        `https://api-inference.huggingface.co/models/${process.env.HUGGINGFACE_VISION_MODEL}`,
+    const groqReply = groqData.choices[0].message.content;
+
+    // -----------------------------
+    // 2. HUGGINGFACE IMAGE MODEL
+    // (if message contains: "generate image")
+    // -----------------------------
+    let hfImage = null;
+
+    if (message.toLowerCase().includes("generate image")) {
+      const hfRes = await fetch(
+        "https://api-inference.huggingface.co/models/stabilityai/sdxl",
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            inputs: {
-              image: imageUrl, // PUBLIC URL — BLIP supports this
-              question: prompt,
-            },
-          }),
+          body: JSON.stringify({ inputs: message }),
         }
       );
 
-      if (!visionRes.ok) {
-        const raw = await visionRes.text();
-        console.error("HF Vision Error:", raw);
+      if (!hfRes.ok) throw new Error("HuggingFace API error");
 
-        return NextResponse.json({
-          success: false,
-          message: "HuggingFace vision model error. Check model name/token.",
-        });
-      }
-
-      const visionData = await visionRes.json();
-
-      aiResponseText =
-        visionData.generated_text ||
-        visionData[0]?.generated_text ||
-        "I could not understand the image.";
+      const buffer = await hfRes.arrayBuffer();
+      hfImage = Buffer.from(buffer).toString("base64");
     }
 
-    // =====================================================================
-    // 🔵 2. TEXT MODE → Groq
-    // =====================================================================
-    if (!imageUrl) {
-      if (!process.env.GROQ_API_KEY) {
-        return NextResponse.json({
-          success: false,
-          message: "Missing GROQ API Key",
-        });
-      }
+    // Save chat into DB
+    await Chat.create({
+      userId,
+      message,
+      reply: groqReply,
+      image: hfImage || null,
+    });
 
-      const groqRes = await fetch(
-        "https://api.groq.com/openai/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: process.env.GROQ_MODEL,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        }
-      );
-
-      const groqData = await groqRes.json();
-
-      if (groqData.error) {
-        console.error("Groq Error:", groqData);
-        return NextResponse.json({
-          success: false,
-          message: groqData.error.message,
-        });
-      }
-
-      aiResponseText = groqData.choices[0].message.content;
-    }
-
-    // =====================================================================
-    // 🔵 SAVE ASSISTANT MESSAGE
-    // =====================================================================
-    const assistantMessage = {
-      role: "assistant",
-      content: aiResponseText,
-      timestamp: Date.now(),
-    };
-
-    chat.messages.push(assistantMessage);
-
-    if (chatId !== "owner-chat") await chat.save();
-
-    // SUCCESS
     return NextResponse.json({
       success: true,
-      data: assistantMessage,
+      reply: groqReply,
+      image: hfImage || null,
     });
   } catch (err) {
-    console.error("AI Route Error:", err);
     return NextResponse.json({
       success: false,
-      message: err.message,
+      error: err.message,
     });
   }
-        }
+}
