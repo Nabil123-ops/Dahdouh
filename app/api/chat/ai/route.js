@@ -1,104 +1,96 @@
 // app/api/chat/ai/route.js
 import { NextResponse } from "next/server";
-import connectDB from "@/config/db";
-import Chat from "@/models/Chat";
-import { getAuth } from "@clerk/nextjs/server";
 
 export async function POST(req) {
   try {
-    await connectDB();
-
-    const { userId } = getAuth(req);
-    if (!userId) {
-      return NextResponse.json({
-        success: false,
-        message: "Not authenticated",
-      });
-    }
-
-    // Get message from client
-    const { prompt, image, chatId } = await req.json();
+    // Read request body
+    const body = await req.json();
+    const { prompt, image } = body;
 
     if (!prompt || prompt.trim() === "") {
-      return NextResponse.json({
-        success: false,
-        message: "Message cannot be empty",
+      return NextResponse.json(
+        { success: false, message: "Prompt is required." },
+        { status: 400 }
+      );
+    }
+
+    // --- MODEL CONFIG ---
+    const apiKey = process.env.GROQ_API_KEY;
+    const model = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+
+    if (!apiKey) {
+      return NextResponse.json(
+        { success: false, message: "Missing GROQ_API_KEY" },
+        { status: 500 }
+      );
+    }
+
+    // --- BUILD REQUEST BODY FOR GROQ ---
+    const messages = [
+      {
+        role: "user",
+        content: prompt,
+      },
+    ];
+
+    // If image is sent (base64)
+    if (image) {
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: prompt,
+          },
+          {
+            type: "input_image",
+            image_url: image, // base64 string
+          },
+        ],
       });
     }
 
-    // -------------------------------
-    // 1️⃣ CALL **GROQ**
-    // -------------------------------
-    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    // --- CALL GROQ API ---
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL || "llama3-8b-8192",
-        messages: [
-          { role: "system", content: "You are Dahdouh AI assistant." },
-          { role: "user", content: prompt },
-        ],
+        model,
+        messages,
+        temperature: 0.6,
+        max_tokens: 500,
       }),
     });
 
-    const groqData = await groqRes.json();
+    const data = await response.json();
 
-    console.log("🔥 Groq Response:", groqData);
-
-    if (!groqData?.choices?.[0]?.message?.content) {
-      throw new Error("Groq API returned invalid format");
-    }
-
-    const reply = groqData.choices[0].message.content;
-
-    // -------------------------------
-    // 2️⃣ OPTIONAL: Huggingface image generation
-    // -------------------------------
-    let hfImage = null;
-
-    if (prompt.toLowerCase().includes("generate image")) {
-      const hfRes = await fetch(
-        "https://api-inference.huggingface.co/models/stabilityai/sdxl",
+    // API error from Groq
+    if (!response.ok) {
+      return NextResponse.json(
         {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ inputs: prompt }),
-        }
+          success: false,
+          message: data.error?.message || "Groq API error",
+        },
+        { status: 500 }
       );
-
-      const buffer = await hfRes.arrayBuffer();
-      hfImage = Buffer.from(buffer).toString("base64");
     }
 
-    // -------------------------------
-    // 3️⃣ SAVE CHAT
-    // -------------------------------
-    await Chat.findByIdAndUpdate(chatId, {
-      $push: {
-        messages: {
-          role: "assistant",
-          content: reply,
-          image: hfImage,
-        },
-      },
-    });
+    const aiMessage = data?.choices?.[0]?.message?.content || "No response";
 
     return NextResponse.json({
       success: true,
-      data: { content: reply, image: hfImage },
+      reply: aiMessage,
     });
-
   } catch (err) {
-    console.error("🔥 API ERROR:", err.message);
-    return NextResponse.json({
-      success: false,
-      message: err.message,
-    });
+    return NextResponse.json(
+      {
+        success: false,
+        message: err.message || "Server error",
+      },
+      { status: 500 }
+    );
   }
 }
