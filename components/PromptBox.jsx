@@ -10,13 +10,13 @@ import toast from "react-hot-toast";
 const PromptBox = ({ isLoading, setIsLoading }) => {
   const [prompt, setPrompt] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef();
 
   const { user, chats, setChats, selectedChat, setSelectedChat } =
     useAppContext();
 
   // ========================================================
-  // 1️⃣ PREVIEW ONLY
+  // 1️⃣ PREVIEW ONLY (BLOB) — NOT SENT TO SERVER
   // ========================================================
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -24,15 +24,13 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
     setSelectedFile(file);
 
-    // preview blob only
     const previewMsg = {
       role: "user",
-      content: URL.createObjectURL(file),
+      content: URL.createObjectURL(file), // <--- BLOB ONLY FOR PREVIEW
       isImage: true,
       timestamp: Date.now(),
     };
 
-    // add preview msg to chat
     setSelectedChat((prev) => ({
       ...prev,
       messages: [...prev.messages, previewMsg],
@@ -50,7 +48,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
   };
 
   // ========================================================
-  // 2️⃣ Upload to server → returns public URL
+  // 2️⃣ UPLOAD TO SERVER → RETURN PUBLIC URL (SUPABASE)
   // ========================================================
   const uploadToServer = async () => {
     if (!selectedFile) return null;
@@ -59,19 +57,19 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
       const form = new FormData();
       form.append("file", selectedFile);
 
-      const { data } = await axios.post("/api/upload-image", form, {
+      const res = await axios.post("/api/upload-image", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      if (data.success) return data.url;
+      if (res.data.success) return res.data.url;
+
       return null;
     } catch (err) {
-      console.error("Upload error", err);
+      console.error("Upload error:", err);
       return null;
     }
   };
 
-  // ENTER KEY
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -80,7 +78,7 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
   };
 
   // ========================================================
-  // 3️⃣ SEND TO AI
+  // 3️⃣ SEND PROMPT TO AI ROUTE
   // ========================================================
   const sendPrompt = async (e) => {
     e.preventDefault();
@@ -94,12 +92,12 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
     setIsLoading(true);
 
+    // --- Save user text locally ---
     let finalPrompt = prompt.trim();
     setPrompt("");
 
-    // Save text locally
     if (finalPrompt) {
-      const msg = {
+      const userMsg = {
         role: "user",
         content: finalPrompt,
         timestamp: Date.now(),
@@ -107,43 +105,42 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
 
       setSelectedChat((prev) => ({
         ...prev,
-        messages: [...prev.messages, msg],
+        messages: [...prev.messages, userMsg],
       }));
 
       setChats((prev) =>
         prev.map((c) =>
           c._id === selectedChat._id
-            ? { ...c, messages: [...c.messages, msg] }
+            ? { ...c, messages: [...c.messages, userMsg] }
             : c
         )
       );
     }
 
-    // Upload image
+    // --- Upload image & get public URL ---
     let uploadedImageURL = null;
 
     if (selectedFile) {
       uploadedImageURL = await uploadToServer();
       setSelectedFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      fileInputRef.current.value = "";
     }
 
-    // SEND TO AI API
+    // --- Send to AI (FINAL FIX) ---
     try {
-      const { data } = await axios.post("/api/chat/ai", {
+      const res = await axios.post("/api/chat/ai", {
         chatId: selectedChat._id,
         prompt: finalPrompt,
-        image: uploadedImageURL,
+        image: uploadedImageURL, // REAL PUBLIC URL
       });
 
-      if (!data.success) {
-        toast.error(data.message);
+      if (!res.data.success) {
+        toast.error(res.data.message);
         setIsLoading(false);
         return;
       }
 
-      // FIX: CORRECT FIELD FROM API
-      const text = data.reply || "No response";
+      const text = res.data.data.content;
       const words = text.split(" ");
 
       let assistantMsg = {
@@ -152,40 +149,34 @@ const PromptBox = ({ isLoading, setIsLoading }) => {
         timestamp: Date.now(),
       };
 
-      // add empty message first
       setSelectedChat((prev) => ({
         ...prev,
         messages: [...prev.messages, assistantMsg],
       }));
 
-      // update chat list
       setChats((prev) =>
         prev.map((c) =>
           c._id === selectedChat._id
-            ? {
-                ...c,
-                messages: [...c.messages, assistantMsg],
-              }
+            ? { ...c, messages: [...c.messages, assistantMsg] }
             : c
         )
       );
 
-      // typing animation
+      // Typing animation
       words.forEach((_, i) => {
         setTimeout(() => {
           assistantMsg.content = words.slice(0, i + 1).join(" ");
-
           setSelectedChat((prev) => ({
             ...prev,
             messages: [
-              ...prev.messages.slice(0, prev.messages.length - 1),
+              ...prev.messages.slice(0, -1),
               { ...assistantMsg },
             ],
           }));
         }, i * 60);
       });
     } catch (err) {
-      console.error("AI error:", err);
+      console.error(err);
       toast.error("AI server error");
     } finally {
       setIsLoading(false);
